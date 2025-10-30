@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Admin - Add/Edit Items</title>
+<style>
+body { font-family: 'Inter', sans-serif; background: #f8fafc; color: #1e293b; padding: 20px; }
+.container { max-width: 600px; margin: auto; background: white; padding: 25px; border-radius: 12px; box-shadow: 0 6px 18px rgba(0,0,0,0.08); }
+h2 { text-align: center; margin-bottom: 20px; color: #007bff; }
+label { display: block; margin-top: 10px; font-weight: 600; }
+input, select { width: 100%; padding: 8px; margin-top: 5px; border: 1px solid #cbd5e1; border-radius: 6px; font-size: 1em; }
+button { background: linear-gradient(90deg,#007bff,#00bcd4); color: white; border: none; padding: 10px 15px; border-radius: 8px; cursor: pointer; margin-top: 15px; font-weight: 600; transition: 0.2s; }
+button:hover { transform: scale(1.03); }
+#status { margin-top: 15px; font-weight: 600; }
+.note { font-size: 0.9em; color: #475569; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h2>🛠️ Add / Edit Menu Item</h2>
+
+  <label for="section-select">Select Section:</label>
+  <select id="section-select"></select>
+
+  <label for="new-section-name">Or Add New Section:</label>
+  <input type="text" id="new-section-name" placeholder="Enter new section name" />
+  <button id="add-section-btn">➕ Add Section</button>
+
+  <label for="item-select">Select Item (to Edit):</label>
+  <select id="item-select"><option value="">-- New Item --</option></select>
+
+  <label for="new-item-name">Or Add New Item:</label>
+  <input type="text" id="new-item-name" placeholder="Enter new item name (optional)" />
+
+  <label for="item-price">Price (LKR):</label>
+  <input type="number" id="item-price" placeholder="e.g. 250" />
+  <p class="note">💡 1 Coin = Rs. 30. (Will be stored automatically in coins.)</p>
+
+  <label for="item-portion">Portion (Persons):</label>
+  <input type="number" id="item-portion" placeholder="e.g. 2" />
+
+  <button id="save-item-btn">Save Item</button>
+  <button onclick="window.location.href='index.html'">⬅️ Back to Main Page</button>
+
+  <div id="status"></div>
+</div>
+
+<!-- Firebase -->
+<script src="https://www.gstatic.com/firebasejs/10.14.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.0/firebase-database-compat.js"></script>
+
+<script>
+// Firebase setup
+const firebaseConfig = {
+  apiKey: "AIzaSyCRU75_SPgrDPtI9VYMOsMA71E2eoV6AG4",
+  authDomain: "meals-kcc.firebaseapp.com",
+  databaseURL: "https://meals-kcc-default-rtdb.firebaseio.com",
+  projectId: "meals-kcc",
+  storageBucket: "meals-kcc.appspot.com",
+  messagingSenderId: "821150881161",
+  appId: "1:821150881161:web:d50b0398370b0e19e5fd58",
+  measurementId: "G-F4GKH06S4X"
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+
+// Predefined menu sections
+const MENU_SECTIONS = {
+  "Rice": ["White Rice","Fried Rice","Yellow Rice","Red Rice","Biriyani"],
+  "Curries": ["Dhal Curry","Chicken Curry","Fish Curry","Mutton Curry","Pork Curry"],
+  "Sambols": ["Pol Sambol","Maldive Fish Sambol","Gotu Kola Sambol"],
+  "Salads": ["Cucumber Salad"],
+  "Desserts": ["Jelly"]
+};
+
+const sectionSelect = document.getElementById('section-select');
+const newSectionInput = document.getElementById('new-section-name');
+const addSectionBtn = document.getElementById('add-section-btn');
+const itemSelect = document.getElementById('item-select');
+const newItemInput = document.getElementById('new-item-name');
+const itemPriceInput = document.getElementById('item-price');
+const itemPortionInput = document.getElementById('item-portion');
+const statusEl = document.getElementById('status');
+
+let currentItems = {}; // key: firebaseKey, value: itemData
+
+// Load sections
+function loadSections() {
+  db.ref('menu').once('value').then(snapshot => {
+    const data = snapshot.val() || {};
+    const existingSections = Object.keys(data);
+    const allSections = new Set([...Object.keys(MENU_SECTIONS), ...existingSections]);
+    sectionSelect.innerHTML = '<option value="">-- Select Section --</option>';
+    allSections.forEach(sec => {
+      const opt = document.createElement('option');
+      opt.value = sec;
+      opt.textContent = sec;
+      sectionSelect.appendChild(opt);
+    });
+  });
+}
+loadSections();
+
+// Add new section
+addSectionBtn.addEventListener('click', () => {
+  const newSection = newSectionInput.value.trim();
+  if (!newSection) return alert('Enter section name!');
+  
+  db.ref('menu/' + newSection).once('value').then(snapshot => {
+    if (snapshot.exists()) {
+      alert('Section already exists!');
+      return;
+    }
+    db.ref('menu/' + newSection).set({}).then(() => {
+      statusEl.innerHTML = `<p style="color:green;">✅ Section "${newSection}" added!</p>`;
+      newSectionInput.value = '';
+      loadSections();
+    });
+  });
+});
+
+// Populate items
+sectionSelect.addEventListener('change', () => {
+  const section = sectionSelect.value;
+  itemSelect.innerHTML = '<option value="">-- New Item --</option>';
+  newItemInput.value = '';
+  itemPriceInput.value = '';
+  itemPortionInput.value = '';
+
+  if (!section) return;
+
+  currentItems = {};
+  db.ref('menu/' + section).once('value').then(snapshot => {
+    const data = snapshot.val() || {};
+    Object.entries(data).forEach(([key, val]) => {
+      currentItems[key] = val;
+      const opt = document.createElement('option');
+      opt.value = key;
+      opt.textContent = val.name;
+      itemSelect.appendChild(opt);
+    });
+
+    // Add predefined missing ones
+    if (MENU_SECTIONS[section]) {
+      MENU_SECTIONS[section].forEach(name => {
+        if (!Object.values(currentItems).some(i => i.name === name)) {
+          const opt = document.createElement('option');
+          opt.value = 'pre_' + name;
+          opt.textContent = name + ' (predefined)';
+          itemSelect.appendChild(opt);
+        }
+      });
+    }
+  });
+});
+
+// When item selected
+itemSelect.addEventListener('change', () => {
+  const key = itemSelect.value;
+  if (!key) {
+    newItemInput.value = '';
+    itemPriceInput.value = '';
+    itemPortionInput.value = '';
+    return;
+  }
+  if (currentItems[key]) {
+    newItemInput.value = currentItems[key].name;
+    const rupees = (currentItems[key].coins || 0) * 30;
+    itemPriceInput.value = rupees;
+    itemPortionInput.value = currentItems[key].portion || 1;
+  } else if (key.startsWith('pre_')) {
+    const section = sectionSelect.value;
+    const itemName = key.slice(4);
+    db.ref('menu/' + section).push({ name: itemName, price: 0, coins: 0, portion: 1 })
+      .then(snapshot => {
+        const firebaseKey = snapshot.key;
+        currentItems[firebaseKey] = { name: itemName, price: 0, coins: 0, portion: 1 };
+        itemSelect.value = firebaseKey;
+        newItemInput.value = itemName;
+        itemPriceInput.value = 0;
+        itemPortionInput.value = 1;
+        statusEl.innerHTML = `<p style="color:green;">✅ "${itemName}" added (0 coins)</p>`;
+      });
+  }
+});
+
+// Save / Update item
+document.getElementById('save-item-btn').addEventListener('click', () => {
+  const section = sectionSelect.value;
+  if (!section) return alert('Select a section!');
+  let itemName = newItemInput.value.trim();
+  if (!itemName) return alert('Enter item name!');
+
+  const rupees = Number(itemPriceInput.value) || 0;
+  const coins = Math.round(rupees / 30);
+  const portion = Number(itemPortionInput.value) || 1;
+  const selectedKey = itemSelect.value;
+
+  const itemData = { name: itemName, price: rupees, coins, portion };
+
+  if (currentItems[selectedKey]) {
+    db.ref(`menu/${section}/${selectedKey}`).set(itemData)
+      .then(() => {
+        statusEl.innerHTML = `<p style="color:green;">✅ Updated "${itemName}" — Rs.${rupees} (${coins} coins)</p>`;
+        sectionSelect.dispatchEvent(new Event('change'));
+      })
+      .catch(err => statusEl.innerHTML = `<p style="color:red;">❌ Error: ${err.message}</p>`);
+  } else {
+    db.ref('menu/' + section).push(itemData)
+      .then(() => {
+        statusEl.innerHTML = `<p style="color:green;">✅ Added "${itemName}" — Rs.${rupees} (${coins} coins)</p>`;
+        sectionSelect.dispatchEvent(new Event('change'));
+      })
+      .catch(err => statusEl.innerHTML = `<p style="color:red;">❌ Error: ${err.message}</p>`);
+  }
+
+  itemSelect.value = '';
+  newItemInput.value = '';
+  itemPriceInput.value = '';
+  itemPortionInput.value = '';
+});
+</script>
+</body>
+</html>

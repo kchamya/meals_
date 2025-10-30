@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Family Meal Planner</title>
+
+<!-- Firebase -->
+<script src="https://www.gstatic.com/firebasejs/10.14.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.0/firebase-database-compat.js"></script>
+
+<style>
+:root{
+  --bg:#f4f7fc; --card:#fff; --accent:#3b82f6; --danger:#dc2626;
+}
+body{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial; background:var(--bg); margin:0;padding:20px;color:#111}
+.container{max-width:900px;margin:0 auto;background:var(--card);border-radius:12px;padding:24px;box-shadow:0 8px 30px rgba(2,6,23,0.08)}
+h1{ text-align:center; margin:6px 0 18px; background:linear-gradient(90deg,#007bff,#00bcd4); -webkit-background-clip:text; -webkit-text-fill-color:transparent; font-size:26px;}
+.grid{display:grid;grid-template-columns:1fr 380px;gap:18px}
+@media(max-width:900px){.grid{grid-template-columns:1fr}}
+.card{background:inherit;padding:12px;border-radius:10px;position:relative}
+label.item{display:flex;justify-content:space-between;align-items:center;padding:8px;border-radius:8px;border:1px solid #e6eefb;background:#fbfdff;margin-top:6px}
+.controls{display:flex;gap:8px;align-items:center;margin-bottom:12px}
+button{background:linear-gradient(90deg,#007bff,#00bcd4);color:white;border:0;padding:9px 12px;border-radius:8px;cursor:pointer;font-weight:600}
+button.secondary{background:#f3f4f6;color:#111}
+button.green{background:#16a34a;width:100%;padding:10px 12px}
+button.orange{background:#f97316;width:100%;padding:10px 12px;margin-top:8px}
+#lock-message{color:var(--danger);font-weight:700;margin-top:8px}
+#orders-list{max-height:240px;overflow:auto;padding:8px;border-radius:8px;background:#f3f6fb}
+.small-btn{padding:6px 8px;border-radius:6px;font-size:0.9em}
+.accept-btn{margin-left:8px}
+.summary-item{margin-bottom:6px;border-bottom:1px dashed #e6eefb;padding-bottom:6px}
+.edit-btn{background:transparent;color:#111;border:none;padding:2px 6px;border-radius:4px;cursor:pointer;font-size:0.8em;margin-left:6px}
+.modal-backdrop{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);display:none;align-items:center;justify-content:center;z-index:999}
+.modal{background:white;padding:20px;border-radius:10px;width:300px;max-width:90%}
+.modal h3{margin-top:0;font-size:18px}
+.modal label{display:block;margin-top:8px;font-weight:600}
+.modal input{width:100%;padding:6px;margin-top:4px;border:1px solid #cbd5e1;border-radius:6px}
+.modal button{margin-top:10px;width:100%}
+
+/* Top-right coin display */
+#coin-display{
+  position:fixed;
+  top:20px;
+  right:20px;
+  background:linear-gradient(90deg,#fbbf24,#f59e0b);
+  color:white;
+  font-weight:700;
+  padding:6px 12px;
+  border-radius:12px;
+  box-shadow:0 4px 12px rgba(0,0,0,0.1);
+  z-index:999;
+  cursor:pointer;
+}
+</style>
+</head>
+<body>
+<div id="coin-display">🪙 0</div>
+
+<div class="container">
+  <h1>🍽️ Meal Planner</h1>
+
+  <div style="text-align:center;margin-bottom:14px">
+    <button id="member-btn">Member</button>
+    <button id="admin-login-btn" class="secondary">Admin Login</button>
+    <span id="current-user" style="margin-left:12px;font-weight:700"></span>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <h3>Menu — Select Your Dishes</h3>
+        <button id="add-section-btn" class="secondary small-btn" style="display:none">+ Add Section</button>
+      </div>
+      <div id="menu-list"></div>
+      <div id="lock-message"></div>
+    </div>
+
+    <div class="card">
+      <div class="controls">
+        <select id="meal-type">
+          <option>Lunch</option>
+          <option>Dinner</option>
+        </select>
+        <input id="order-date" type="date" disabled style="padding:8px;border-radius:6px;border:1px solid #dbe7ff">
+      </div>
+
+      <h3>Order Summary</h3>
+      <div id="summary"></div>
+
+      <div style="margin-top:10px">
+        <button id="submit-btn" class="green">✅ SEND</button>
+        <button id="view-bills-btn" class="orange">🧾 View Bills</button>
+      </div>
+
+      <div class="card admin-section" id="admin-section" style="display:none;margin-top:12px">
+        <h4 style="margin:0 0 8px">🔐 Admin Controls</h4>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+          <button id="lock-btn" class="secondary small-btn">Lock Orders</button>
+          <button id="reset-btn" class="secondary small-btn">Reset All</button>
+        </div>
+        <h4 style="margin:8px 0">All Orders</h4>
+        <div id="orders-list"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Modal -->
+<div id="modal-backdrop" class="modal-backdrop">
+  <div class="modal" id="modal-content"></div>
+</div>
+
+<script>
+/* -------------------------
+   Firebase initialization
+------------------------- */
+const firebaseConfig = {
+  apiKey: "AIzaSyCRU75_SPgrDPtI9VYMOsMA71E2eoV6AG4",
+  authDomain: "meals-kcc.firebaseapp.com",
+  databaseURL: "https://meals-kcc-default-rtdb.firebaseio.com",
+  projectId: "meals-kcc",
+  storageBucket: "meals-kcc.appspot.com",
+  messagingSenderId: "821150881161",
+  appId: "1:821150881161:web:d50b0398370b0e19e5fd58"
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.database();
+
+/* -------------------------
+   State & DOM refs
+------------------------- */
+let MENU_SECTIONS = {};
+let USER_NAME = localStorage.getItem('familyMealName') || "Guest";
+let IS_ADMIN = localStorage.getItem('isAdmin') === 'true';
+let LOCKED = JSON.parse(localStorage.getItem('locked') || 'false');
+const INITIAL_COINS = 100;
+
+const menuList = document.getElementById('menu-list');
+const summaryEl = document.getElementById('summary');
+const currentUserEl = document.getElementById('current-user');
+const lockMessageEl = document.getElementById('lock-message');
+const adminSection = document.getElementById('admin-section');
+const lockBtn = document.getElementById('lock-btn');
+const ordersListEl = document.getElementById('orders-list');
+const submitBtn = document.getElementById('submit-btn');
+const addSectionBtn = document.getElementById('add-section-btn');
+const modalBackdrop = document.getElementById('modal-backdrop');
+const modalContent = document.getElementById('modal-content');
+const coinDisplay = document.getElementById('coin-display');
+
+document.getElementById('order-date').value = new Date().toISOString().slice(0,10);
+
+function updateCurrentUserDisplay(){ 
+  currentUserEl.textContent = USER_NAME; 
+  updateCoinDisplay();
+}
+updateCurrentUserDisplay();
+
+/* -------------------------
+   Firebase menu load
+------------------------- */
+function loadMenuFromFirebase(callback){
+  db.ref('menu').once('value').then(snap=>{
+    MENU_SECTIONS = snap.val() || {};
+    callback && callback();
+  });
+}
+
+/* -------------------------
+   Coin management
+------------------------- */
+function getCoins(user){
+  return db.ref('coins/'+user).once('value').then(snap=>{
+    if(snap.exists()) return snap.val();
+    db.ref('coins/'+user).set(INITIAL_COINS);
+    return INITIAL_COINS;
+  });
+}
+
+function updateCoinDisplay(){
+  getCoins(USER_NAME).then(c=>{
+    coinDisplay.textContent = `🪙 ${c}`;
+  });
+}
+
+/* -------------------------
+   Render menu with coin limit
+------------------------- */
+function renderMenu(selected={}){
+  menuList.innerHTML = '';
+  for (const [section, itemsObj] of Object.entries(MENU_SECTIONS)){
+    const secDiv = document.createElement('div');
+    secDiv.style.display='flex'; secDiv.style.justifyContent='space-between'; secDiv.style.alignItems='center';
+    secDiv.innerHTML = `<strong>${section}</strong>`;
+    if(IS_ADMIN){
+      const btn = document.createElement('button');
+      btn.textContent='/';
+      btn.className='edit-btn';
+      btn.addEventListener('click',()=>editSection(section));
+      secDiv.appendChild(btn);
+    }
+    menuList.appendChild(secDiv);
+
+    const itemsArray = Object.entries(itemsObj || {});
+    itemsArray.forEach(([key, item])=>{
+      const label = document.createElement('label');
+      label.className='item';
+      const coinEmoji = (item.coins < 1)? '🔘' : '🪙';
+      label.innerHTML = `
+  <span style="display:flex;justify-content:space-between;align-items:center; width:100%;">
+    <input type="checkbox" data-id="${key}" ${selected[key]?'checked':''} /> ${item.name} 
+    <span style="margin-left:auto">${coinEmoji.repeat(Math.max(1,item.coins))}</span>
+  </span>`;
+      if(IS_ADMIN){
+        const btn = document.createElement('button');
+        btn.textContent='..';
+        btn.className='edit-btn';
+        btn.addEventListener('click',()=>editItem(section, key));
+        label.appendChild(btn);
+      }
+      menuList.appendChild(label);
+    });
+  }
+  if(IS_ADMIN) addSectionBtn.style.display='inline-block';
+}
+
+/* -------------------------
+   Modal helpers
+------------------------- */
+function showModal(html){ modalContent.innerHTML = html; modalBackdrop.style.display='flex'; }
+function closeModal(){ modalBackdrop.style.display='none'; }
+
+/* -------------------------
+   Section & Item editing
+------------------------- */
+function editSection(sectionName){
+  showModal(`
+    <h3>Edit Section</h3>
+    <label>Rename Section:</label>
+    <input id="sec-rename" value="${sectionName}" />
+    <label>Add Item:</label>
+    <input id="sec-new-item" placeholder="Item Name"/>
+    <label>Price (LKR):</label>
+    <input type="number" id="sec-new-price" placeholder="0"/>
+    <button id="sec-save-btn">Save Changes</button>
+    <button id="sec-del-btn" style="background:${getComputedStyle(document.documentElement).getPropertyValue('--danger')}">Delete Section</button>
+    <button id="sec-cancel-btn" class="secondary">Cancel</button>
+  `);
+  document.getElementById('sec-cancel-btn').onclick = closeModal;
+  document.getElementById('sec-save-btn').onclick = ()=>{
+    const newName = document.getElementById('sec-rename').value.trim();
+    const newItem = document.getElementById('sec-new-item').value.trim();
+    const price = Number(document.getElementById('sec-new-price').value)||0;
+    if(newName!==sectionName){
+      db.ref('menu').child(newName).set(MENU_SECTIONS[sectionName]);
+      db.ref('menu').child(sectionName).remove();
+      MENU_SECTIONS[newName]=MENU_SECTIONS[sectionName];
+      delete MENU_SECTIONS[sectionName];
+      sectionName=newName;
+    }
+    if(newItem){
+      const coins=Math.round(price/30);
+      db.ref('menu').child(sectionName).push({name:newItem,price,coins});
+      if(!MENU_SECTIONS[sectionName]) MENU_SECTIONS[sectionName]={};
+      MENU_SECTIONS[sectionName][Date.now()]= {name:newItem,price,coins};
+    }
+    loadMenuFromFirebase(()=>renderMenu());
+    closeModal();
+  }
+  document.getElementById('sec-del-btn').onclick = ()=>{
+    if(confirm('Delete this section?')){
+      db.ref('menu').child(sectionName).remove();
+      delete MENU_SECTIONS[sectionName];
+      renderMenu();
+      closeModal();
+    }
+  }
+}
+
+function editItem(section,key){
+  const item = MENU_SECTIONS[section][key];
+  showModal(`
+    <h3>Edit Item</h3>
+    <label>Name:</label>
+    <input id="item-name" value="${item.name}"/>
+    <label>Price (LKR):</label>
+    <input type="number" id="item-price" value="${item.price||0}"/>
+    <button id="item-save-btn">Save Changes</button>
+    <button id="item-del-btn" style="background:${getComputedStyle(document.documentElement).getPropertyValue('--danger')}">Delete Item</button>
+    <button id="item-cancel-btn" class="secondary">Cancel</button>
+  `);
+  document.getElementById('item-cancel-btn').onclick = closeModal;
+  document.getElementById('item-save-btn').onclick = ()=>{
+    const newName = document.getElementById('item-name').value.trim();
+    const price = Number(document.getElementById('item-price').value)||0;
+    const coins=Math.round(price/30);
+    db.ref('menu').child(section).child(key).set({name:newName,price,coins});
+    MENU_SECTIONS[section][key]={name:newName,price,coins};
+    renderMenu();
+    closeModal();
+  }
+  document.getElementById('item-del-btn').onclick = ()=>{
+    if(confirm('Delete this item?')){
+      db.ref('menu').child(section).child(key).remove();
+      delete MENU_SECTIONS[section][key];
+      renderMenu();
+      closeModal();
+    }
+  }
+}
+
+/* -------------------------
+   Add Section button
+------------------------- */
+addSectionBtn.onclick = ()=>{
+  showModal(`
+    <h3>Add Section</h3>
+    <label>Section Name:</label>
+    <input id="new-section-name"/>
+    <button id="add-sec-btn">Add Section</button>
+    <button id="add-sec-cancel" class="secondary">Cancel</button>
+  `);
+  document.getElementById('add-sec-cancel').onclick=closeModal;
+  document.getElementById('add-sec-btn').onclick=()=>{
+    const name=document.getElementById('new-section-name').value.trim();
+    if(!name){alert('Enter section name'); return;}
+    db.ref('menu').child(name).set({});
+    MENU_SECTIONS[name]={};
+    renderMenu();
+    closeModal();
+  }
+}
+
+/* -------------------------
+   Checkbox & submit
+------------------------- */
+function readChecked(){
+  const checked={};
+  menuList.querySelectorAll('input[type="checkbox"]').forEach(cb=>{ if(cb.checked) checked[cb.dataset.id]=true });
+  return checked;
+}
+
+/* -------------------------
+   Local storage helpers
+------------------------- */
+function loadLocal(){ return JSON.parse(localStorage.getItem('familyMealPlanner')||'{}'); }
+function saveLocal(state){ localStorage.setItem('familyMealPlanner', JSON.stringify(state)); }
+
+/* -------------------------
+   Submit flow with coin limit
+------------------------- */
+submitBtn.addEventListener('click', ()=>{
+  if(LOCKED){ alert('Orders are locked!'); return; }
+  const checked = readChecked();
+  if(Object.keys(checked).length === 0) return alert('Please select at least one dish.');
+  
+  // Calculate total coins required
+  let totalCoins = 0;
+  for(const [sec, itemsObj] of Object.entries(MENU_SECTIONS)){
+    Object.entries(itemsObj||{}).forEach(([k,i])=>{
+      if(checked[k]) totalCoins += i.coins;
+    });
+  }
+  
+  getCoins(USER_NAME).then(currentCoins=>{
+    if(totalCoins>currentCoins) return alert(`You only have ${currentCoins} coins. Order costs ${totalCoins} coins.`);
+    
+    const payWin = window.open('','','width=320,height=260');
+    payWin.document.write(`
+      <html><head><title>Who paid?</title></head>
+      <body style="font-family:sans-serif;text-align:center;padding:18px;">
+        <h3>Who paid the bill?</h3>
+        <div style="display:flex;flex-direction:column;gap:8px;align-items:center;">
+          <button onclick="choose('Amma')">Amma</button>
+          <button onclick="choose('Thaththa')">Thaththa</button>
+          <button onclick="choose('Draft')">Draft</button>
+        </div>
+        <script>
+          function choose(p){ window.opener.finishSubmit(p); window.close(); }
+        <\/script>
+      </body></html>
+    `);
+  });
+});
+
+function finishSubmit(paidBy){
+  const date = new Date();
+  const dateStr = date.toISOString().slice(0,10);
+  const timeStr = date.toTimeString().slice(0,8).replace(/:/g,'');
+  const order = {name:USER_NAME,date:dateStr,time:timeStr,mealType:document.getElementById('meal-type').value,selectedMeals:readChecked(),paidBy,accepted:false};
+  db.ref(`orders/${USER_NAME}`).set(order)
+    .then(()=>{
+      const billRef = db.ref(`bills/${paidBy}/${dateStr}/${timeStr}`);
+      billRef.set({orderUser:USER_NAME,date:dateStr,time:timeStr,amountCoins:0,accepted:false});
+      const st=loadLocal(); st[USER_NAME]=order; saveLocal(st);
+      renderSummary(); alert('Submitted ✅');
+    })
+    .catch(e=>{ console.error(e); alert('Error saving order'); });
+}
+
+/* -------------------------
+   Render summary
+------------------------- */
+function renderSummary(){
+  db.ref('orders').once('value').then(snap=>{
+    const orders = snap.val() || loadLocal();
+    let html='';
+    for(const user in orders){
+      const o = orders[user];
+      const status = o.accepted?'✅ Accepted':'🕓 Pending';
+      html+=`<div class="summary-item"><b>${user}${user===USER_NAME? ' (You)':''}</b> — ${status}<ul>`;
+      for(const [sec, itemsObj] of Object.entries(MENU_SECTIONS)){
+        Object.entries(itemsObj||{}).forEach(([k,i])=>{
+          if(o.selectedMeals && o.selectedMeals[k]) {
+            const coinEmoji = (i.coins < 1)? '🔘' : '🪙';
+            html+=`<li>${i.name} <span style="float:right">${coinEmoji.repeat(Math.max(1,i.coins))}</span></li>`;
+          }
+        });
+      }
+      html+=`</ul><div style="font-size:0.9em">Paid by: ${o.paidBy||'—'}</div></div>`;
+    }
+    summaryEl.innerHTML=html||'<i>No orders yet.</i>';
+  });
+}
+
+/* -------------------------
+   Admin functions
+------------------------- */
+function updateLockButton(){
+  lockBtn.textContent = LOCKED?'Unlock Orders ❌':'Lock Orders ✅';
+  lockMessageEl.textContent = LOCKED?'Orders are locked!':'';
+}
+updateLockButton();
+lockBtn.addEventListener('click', ()=>{
+  if(!IS_ADMIN) return alert('Admin only');
+  LOCKED=!LOCKED;
+  localStorage.setItem('locked',JSON.stringify(LOCKED));
+  updateLockButton();
+});
+document.getElementById('reset-btn').addEventListener('click', ()=>{
+  if(!IS_ADMIN) return alert('Admin only');
+  if(!confirm('Clear all orders & bills?')) return;
+  db.ref('orders').remove();
+  db.ref('bills').remove();
+  db.ref('coins').remove();
+  localStorage.removeItem('familyMealPlanner');
+  location.reload();
+});
+document.getElementById('admin-login-btn').addEventListener('click', ()=>{
+  const pw = prompt('Enter admin password:');
+  if(pw==='sunoo'){ 
+    IS_ADMIN=true; localStorage.setItem('isAdmin','true'); adminSection.style.display='block'; addSectionBtn.style.display='inline-block'; loadOrders(); alert('Admin access granted ✅'); 
+  }
+  else if(pw) alert('Incorrect password');
+});
+
+/* -------------------------
+   Load orders for admin
+------------------------- */
+function loadOrders(){
+  db.ref('orders').on('value', snap=>{
+    const data = snap.val();
+    ordersListEl.innerHTML='';
+    if(!data){ ordersListEl.innerHTML='<i>No orders yet.</i>'; return; }
+    Object.entries(data).forEach(([user, order])=>{
+      const container=document.createElement('div'); container.style.marginBottom='10px';
+      const items = Object.keys(order.selectedMeals||{}).join(', ').replace(/_/g,' ');
+      container.innerHTML=`<strong>${user}</strong> (${order.mealType}) — Paid by: ${order.paidBy||'—'} <br> Items: ${items||'—'} <br> Status: ${order.accepted?'✅ Accepted':'❌ Not Accepted'}`;
+      if(!order.accepted){
+        const acceptBtn=document.createElement('button');
+        acceptBtn.textContent='✔️ Accept';
+        acceptBtn.className='small-btn accept-btn';
+        acceptBtn.addEventListener('click',()=> adminAcceptOrder(user,order));
+        container.appendChild(acceptBtn);
+      }
+      container.appendChild(document.createElement('hr'));
+      ordersListEl.appendChild(container);
+    });
+  });
+}
+
+function adminAcceptOrder(user, order){
+  if(!IS_ADMIN) return alert('Admin only');
+  const amountRaw = prompt(`Enter bill amount in Rs for ${user} (paid by ${order.paidBy}):`,'');
+
+  if(amountRaw===null) return;
+  const amountRs = parseFloat(amountRaw);
+  if(isNaN(amountRs) || amountRs<0) return alert('Invalid amount');
+  const amountCoins = Math.round(amountRs/30);
+  
+  db.ref(`orders/${user}/accepted`).set(true);
+  
+  const date = order.date||new Date().toISOString().slice(0,10);
+  const time = order.time||new Date().toTimeString().slice(0,8).replace(/:/g,'');
+  db.ref(`bills/${order.paidBy}/${date}/${time}`).update({amountCoins,accepted:true,orderUser:user});
+  
+  // Deduct coins from user
+  db.ref('coins/'+user).once('value').then(snap=>{
+    let current = snap.exists()? snap.val() : INITIAL_COINS;
+    const newBalance = Math.max(0, current-amountCoins);
+    db.ref('coins/'+user).set(newBalance);
+    if(user===USER_NAME) updateCoinDisplay();
+    alert(`Order accepted ✅ — ${amountCoins} coins deducted. Remaining: ${newBalance}`);
+  });
+}
+
+/* -------------------------
+   Coin recharge by admin
+------------------------- */
+coinDisplay.addEventListener('click', ()=>{
+  if(!IS_ADMIN) return;
+  const pw = prompt('Enter recharge password:');
+  if(pw!=='moneyreceived') return alert('Wrong password');
+  const member = prompt('Member name to recharge:');
+  if(!member) return;
+  const amt = parseInt(prompt('Amount of coins to add:'),10);
+  if(isNaN(amt)||amt<=0) return alert('Invalid amount');
+  db.ref('coins/'+member).once('value').then(snap=>{
+    let current = snap.exists()? snap.val(): INITIAL_COINS;
+    db.ref('coins/'+member).set(current+amt);
+    alert(`Added ${amt} coins to ${member}. New balance: ${current+amt}`);
+    if(member===USER_NAME) updateCoinDisplay();
+  });
+});
+
+/* -------------------------
+   Member chooser
+------------------------- */
+document.getElementById('member-btn').addEventListener('click', ()=>{
+  const win = window.open('', '', 'width=320,height=320');
+  win.document.write(`
+    <html><body style="font-family:sans-serif;text-align:center;padding:16px;">
+      <h3>Select Member</h3>
+      <div style="display:flex;flex-direction:column;gap:8px;align-items:center">
+        <button onclick="sel('Amma')">Amma</button>
+        <button onclick="sel('Thaththa')">Thaththa</button>
+        <button onclick="sel('Chamya')">Chamya</button>
+      </div>
+      <script>
+        function sel(n){ window.opener.localStorage.setItem('familyMealName',n); window.opener.USER_NAME=n; window.opener.updateCurrentUserDisplay(); window.close(); }
+      <\/script>
+    </body></html>
+  `);
+});
+
+/* -------------------------
+   Navigation buttons
+------------------------- */
+document.getElementById('view-bills-btn').addEventListener('click', ()=> location.href='bill.html');
+
+/* -------------------------
+   Initialize
+------------------------- */
+window.finishSubmit = finishSubmit;
+loadMenuFromFirebase(()=>{ 
+  renderMenu(loadLocal()[USER_NAME]?.selectedMeals||{}); 
+  renderSummary(); 
+  if(IS_ADMIN){adminSection.style.display='block';addSectionBtn.style.display='inline-block';loadOrders();}
+  updateLockButton(); 
+});
+modalBackdrop.onclick = (e)=>{ if(e.target===modalBackdrop) closeModal(); }
+</script>
+</body>
+</html>
