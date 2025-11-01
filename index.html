@@ -374,7 +374,7 @@ submitBtn.addEventListener('click', ()=>{
         <div style="display:flex;flex-direction:column;gap:8px;align-items:center;">
           <button onclick="choose('Amma')">Amma</button>
           <button onclick="choose('Thaththa')">Thaththa</button>
-          <button onclick="choose('Draft')">Draft</button>
+        
         </div>
         <script>
           function choose(p){ window.opener.finishSubmit(p); window.close(); }
@@ -535,7 +535,7 @@ document.getElementById('member-btn').addEventListener('click', ()=>{
       <div style="display:flex;flex-direction:column;gap:8px;align-items:center">
         <button onclick="sel('Amma')">Amma</button>
         <button onclick="sel('Thaththa')">Thaththa</button>
-        <button onclick="sel('Chamya')">Chamya</button>
+        
       </div>
       <script>
         function sel(n){ window.opener.localStorage.setItem('familyMealName',n); window.opener.USER_NAME=n; window.opener.updateCurrentUserDisplay(); window.close(); }
@@ -563,4 +563,5 @@ modalBackdrop.onclick = (e)=>{ if(e.target===modalBackdrop) closeModal(); }
 </script>
 </body>
 </html>
+
 
