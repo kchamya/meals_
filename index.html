@@ -32,7 +32,7 @@ button.orange{background:#f97316;width:100%;padding:10px 12px;margin-top:8px}
 .summary-item{margin-bottom:6px;border-bottom:1px dashed #e6eefb;padding-bottom:6px}
 .edit-btn{background:transparent;color:#111;border:none;padding:2px 6px;border-radius:4px;cursor:pointer;font-size:0.8em;margin-left:6px}
 .modal-backdrop{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);display:none;align-items:center;justify-content:center;z-index:999}
-.modal{background:white;padding:20px;border-radius:10px;width:300px;max-width:90%}
+.modal{background:white;padding:20px;border-radius:10px;width:360px;max-width:95%}
 .modal h3{margin-top:0;font-size:18px}
 .modal label{display:block;margin-top:8px;font-weight:600}
 .modal input{width:100%;padding:6px;margin-top:4px;border:1px solid #cbd5e1;border-radius:6px}
@@ -52,10 +52,13 @@ button.orange{background:#f97316;width:100%;padding:10px 12px;margin-top:8px}
   z-index:999;
   cursor:pointer;
 }
+.coin-row{display:flex;justify-content:space-between;align-items:center;padding:8px;border-bottom:1px solid #eef2ff}
+.coin-row input[type="number"]{width:80px;padding:6px;border-radius:6px;border:1px solid #cbd5e1}
+.add-btn{padding:6px 8px;border-radius:6px}
 </style>
 </head>
 <body>
-<div id="coin-display">🪙 0</div>
+<div id="coin-display" title="Coins">🪙 0</div>
 
 <div class="container">
   <h1>🍽️ Meal Planner</h1>
@@ -128,12 +131,20 @@ firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
 
 /* -------------------------
-   State & DOM refs
+   Members list (fixed)
+   - Using these display names as keys in Firebase coins/
+   - Only Chamya is admin
 ------------------------- */
-let MENU_SECTIONS = {};
-let USER_NAME = localStorage.getItem('familyMealName') || "Guest";
-let IS_ADMIN = localStorage.getItem('isAdmin') === 'true';
-let LOCKED = JSON.parse(localStorage.getItem('locked') || 'false');
+const MEMBERS = [
+  { display: 'Amma', key: 'Amma' },
+  { display: 'Thaththa', key: 'Thaththa' },
+  { display: 'Chamya', key: 'Chamya' }
+];
+
+window.MENU_SECTIONS = {};
+window.USER_NAME = localStorage.getItem('familyMealName') || "Guest";
+window.IS_ADMIN = localStorage.getItem('isAdmin') === 'true' && window.USER_NAME === 'Chamya';
+window.LOCKED = false;
 const INITIAL_COINS = 100;
 
 const menuList = document.getElementById('menu-list');
@@ -148,54 +159,102 @@ const addSectionBtn = document.getElementById('add-section-btn');
 const modalBackdrop = document.getElementById('modal-backdrop');
 const modalContent = document.getElementById('modal-content');
 const coinDisplay = document.getElementById('coin-display');
+const orderDateInput = document.getElementById('order-date');
 
-document.getElementById('order-date').value = new Date().toISOString().slice(0,10);
+orderDateInput.value = new Date().toISOString().slice(0,10);
 
+/* -------------------------
+   UI updates
+------------------------- */
 function updateCurrentUserDisplay(){ 
-  currentUserEl.textContent = USER_NAME; 
+  currentUserEl.textContent = window.USER_NAME; 
   updateCoinDisplay();
+  adminSection.style.display = window.IS_ADMIN ? 'block' : 'none';
+  addSectionBtn.style.display = window.IS_ADMIN ? 'inline-block' : 'none';
 }
 updateCurrentUserDisplay();
 
 /* -------------------------
-   Firebase menu load
+   Ensure admin PIN default
+------------------------- */
+function ensureAdminPinDefault(){
+  const pinRef = db.ref('admin/pin');
+  pinRef.once('value').then(snap=>{
+    if(!snap.exists()){
+      pinRef.set('1234');
+    }
+  }).catch(()=>{});
+}
+ensureAdminPinDefault();
+
+function syncLockedState(){
+  db.ref('locked').on('value', snap=>{
+    const val = snap.val();
+    window.LOCKED = !!val;
+    lockMessageEl.textContent = window.LOCKED ? 'Orders are LOCKED by admin' : '';
+    lockBtn.textContent = window.LOCKED ? 'Unlock Orders' : 'Lock Orders';
+  });
+}
+syncLockedState();
+
+/* -------------------------
+   Firebase helpers
 ------------------------- */
 function loadMenuFromFirebase(callback){
   db.ref('menu').once('value').then(snap=>{
-    MENU_SECTIONS = snap.val() || {};
+    window.MENU_SECTIONS = snap.val() || {};
     callback && callback();
-  });
+  }).catch(err=>{ window.MENU_SECTIONS = {}; callback && callback(); });
 }
 
-/* -------------------------
-   Coin management
-------------------------- */
 function getCoins(user){
-  return db.ref('coins/'+user).once('value').then(snap=>{
-    if(snap.exists()) return snap.val();
-    db.ref('coins/'+user).set(INITIAL_COINS);
+  if(!user) user = window.USER_NAME;
+  return db.ref('coins/'+encodeKey(user)).once('value').then(snap=>{
+    if(snap.exists()) return Number(snap.val());
+    db.ref('coins/'+encodeKey(user)).set(INITIAL_COINS);
     return INITIAL_COINS;
   });
 }
 
-function updateCoinDisplay(){
-  getCoins(USER_NAME).then(c=>{
-    coinDisplay.textContent = `🪙 ${c}`;
+function setCoins(user, amount){
+  if(!user) user = window.USER_NAME;
+  return db.ref('coins/'+encodeKey(user)).set(amount);
+}
+
+function addCoins(user, delta){
+  if(!user) user = window.USER_NAME;
+  const ref = db.ref('coins/'+encodeKey(user));
+  return ref.transaction(curr=>{
+    if(curr === null) return (INITIAL_COINS + delta);
+    return Number(curr) + Number(delta);
   });
 }
 
 /* -------------------------
-   Render menu
+   Utilities
 ------------------------- */
-function renderMenu(selected={}){
+function encodeKey(s){ return String(s).replace(/\./g,'_'); }
+function escapeHtml(s){ if(s==null) return ''; return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+/* -------------------------
+   Render menu (same as before)
+------------------------- */
+function renderMenu(selectedItems = {}){
   menuList.innerHTML = '';
-  for (const [section, itemsObj] of Object.entries(MENU_SECTIONS)){
+  const sections = window.MENU_SECTIONS || {};
+  const sectionKeys = Object.keys(sections);
+  if(sectionKeys.length === 0){
+    menuList.innerHTML = `<div style="opacity:.7">No menu found. Admins: add sections/items in Firebase or use "Add Section".</div>`;
+    return;
+  }
+  for (const section of sectionKeys){
+    const itemsObj = sections[section] || {};
     const secDiv = document.createElement('div');
     secDiv.style.display='flex'; secDiv.style.justifyContent='space-between'; secDiv.style.alignItems='center';
     secDiv.innerHTML = `<strong>${section}</strong>`;
-    if(IS_ADMIN){
+    if(window.IS_ADMIN){
       const btn = document.createElement('button');
-      btn.textContent='/';
+      btn.textContent='✎';
       btn.className='edit-btn';
       btn.addEventListener('click',()=>editSection(section));
       secDiv.appendChild(btn);
@@ -203,18 +262,29 @@ function renderMenu(selected={}){
     menuList.appendChild(secDiv);
 
     const itemsArray = Object.entries(itemsObj || {});
+    if(itemsArray.length === 0){
+      const emptyMsg = document.createElement('div');
+      emptyMsg.style.opacity = '.7';
+      emptyMsg.style.margin = '6px 0 0 6px';
+      emptyMsg.textContent = '(no items in this section)';
+      menuList.appendChild(emptyMsg);
+    }
     itemsArray.forEach(([key, item])=>{
       const label = document.createElement('label');
       label.className='item';
-      const coinEmoji = (item.coins < 1)? '🔘' : '🪙';
+      const itemCoins = (typeof item.coins === 'number') ? item.coins : (parseInt(item.coins) || 0);
+      const coinDisplayRepeats = itemCoins <= 0 ? '🔘' : '🪙'.repeat(Math.min(5, Math.max(1, itemCoins)));
       label.innerHTML = `
   <span style="display:flex;justify-content:space-between;align-items:center; width:100%;">
-    <input type="checkbox" data-id="${key}" ${selected[key]?'checked':''} /> ${item.name} 
-    <span style="margin-left:auto">${coinEmoji.repeat(Math.max(1,item.coins))}</span>
+    <span style="display:flex;align-items:center;gap:8px">
+      <input type="checkbox" data-section="${escapeHtml(section)}" data-id="${escapeHtml(key)}" ${selectedItems[key] ? 'checked' : ''} /> 
+      <span>${escapeHtml(item.name || key)}</span>
+    </span>
+    <span style="margin-left:auto">${coinDisplayRepeats}</span>
   </span>`;
-      if(IS_ADMIN){
+      if(window.IS_ADMIN){
         const btn = document.createElement('button');
-        btn.textContent='..';
+        btn.textContent='⋯';
         btn.className='edit-btn';
         btn.addEventListener('click',()=>editItem(section, key));
         label.appendChild(btn);
@@ -222,17 +292,19 @@ function renderMenu(selected={}){
       menuList.appendChild(label);
     });
   }
-  if(IS_ADMIN) addSectionBtn.style.display='inline-block';
 }
 
 /* -------------------------
    Modal helpers
 ------------------------- */
-function showModal(html){ modalContent.innerHTML = html; modalBackdrop.style.display='flex'; }
-function closeModal(){ modalBackdrop.style.display='none'; }
+function showModal(html){
+  modalContent.innerHTML = html;
+  modalBackdrop.style.display='flex';
+}
+function closeModal(){ modalBackdrop.style.display='none'; modalContent.innerHTML=''; }
 
 /* -------------------------
-   Add Section button
+   Add/Edit (admin) - same as earlier
 ------------------------- */
 addSectionBtn.onclick = ()=>{
   showModal(`
@@ -242,36 +314,85 @@ addSectionBtn.onclick = ()=>{
     <button id="add-sec-btn">Add Section</button>
     <button id="add-sec-cancel" class="secondary">Cancel</button>
   `);
-  document.getElementById('add-sec-cancel').onclick=closeModal;
-  document.getElementById('add-sec-btn').onclick=()=>{
-    const name=document.getElementById('new-section-name').value.trim();
-    if(!name){alert('Enter section name'); return;}
-    db.ref('menu').child(name).set({});
-    MENU_SECTIONS[name]={};
-    renderMenu();
-    closeModal();
+  document.getElementById('add-sec-cancel').onclick = closeModal;
+  document.getElementById('add-sec-btn').onclick = ()=>{
+    const name = document.getElementById('new-section-name').value.trim();
+    if(!name){ alert('Enter section name'); return; }
+    db.ref('menu/'+name).set({}).then(()=>{
+      window.MENU_SECTIONS[name] = {};
+      renderMenu();
+      closeModal();
+    });
+  }
+}
+
+function editSection(section){
+  showModal(`
+    <h3>Edit Section: ${escapeHtml(section)}</h3>
+    <label>New Item Name:</label>
+    <input id="edit-item-name"/>
+    <label>Coins (number):</label>
+    <input id="edit-item-coins" type="number" min="0" value="1"/>
+    <button id="add-item-btn">Add Item</button>
+    <button id="close-edit" class="secondary">Close</button>
+  `);
+  document.getElementById('close-edit').onclick = closeModal;
+  document.getElementById('add-item-btn').onclick = ()=>{
+    const name = document.getElementById('edit-item-name').value.trim();
+    const coins = parseInt(document.getElementById('edit-item-coins').value) || 0;
+    if(!name){ alert('Item name required'); return; }
+    const key = 'i'+Date.now();
+    const updates = {};
+    updates['/menu/'+section+'/'+key] = { name, coins };
+    db.ref().update(updates).then(()=> loadMenuFromFirebase(()=>{ renderMenu(); closeModal(); }));
+  }
+}
+
+function editItem(section, key){
+  const item = (window.MENU_SECTIONS[section] || {})[key] || {};
+  showModal(`
+    <h3>Edit Item</h3>
+    <label>Name</label><input id="itm-name" value="${escapeHtml(item.name || '')}"/>
+    <label>Coins</label><input id="itm-coins" type="number" min="0" value="${item.coins || 0}"/>
+    <button id="save-itm">Save</button>
+    <button id="del-itm" class="secondary">Delete</button>
+    <button id="close-itm" class="secondary">Close</button>
+  `);
+  document.getElementById('close-itm').onclick = closeModal;
+  document.getElementById('save-itm').onclick = ()=>{
+    const name = document.getElementById('itm-name').value.trim();
+    const coins = parseInt(document.getElementById('itm-coins').value) || 0;
+    db.ref('menu/'+section+'/'+key).set({ name, coins }).then(()=> loadMenuFromFirebase(()=>{ renderMenu(); closeModal(); }));
+  };
+  document.getElementById('del-itm').onclick = ()=>{
+    if(!confirm('Delete item?')) return;
+    db.ref('menu/'+section+'/'+key).remove().then(()=> loadMenuFromFirebase(()=>{ renderMenu(); closeModal(); }));
   }
 }
 
 /* -------------------------
-   Member chooser (with Chamya)
+   Member chooser (popup)
 ------------------------- */
 document.getElementById('member-btn').addEventListener('click', ()=>{
   const win = window.open('', '', 'width=320,height=320');
   win.document.write(`
     <html><body style="font-family:sans-serif;text-align:center;padding:16px;">
       <h3>Select Member</h3>
-      <div style="display:flex;flex-direction:column;gap:8px;align-items:center">
+      <div style="display:flex;flex-direction:column;gap:8px;align-items:center;margin-top:8px">
         <button onclick="sel('Amma')">Amma</button>
         <button onclick="sel('Thaththa')">Thaththa</button>
         <button onclick="sel('Chamya')">Chamya</button>
+        <button onclick="sel('Guest')">Guest</button>
       </div>
       <script>
-        function sel(n){ 
-          window.opener.localStorage.setItem('familyMealName',n); 
-          window.opener.USER_NAME=n; 
-          window.opener.updateCurrentUserDisplay(); 
-          window.close(); 
+        function sel(n){
+          try{
+            window.opener.localStorage.setItem('familyMealName', n);
+            window.opener.USER_NAME = n;
+            window.opener.localStorage.setItem('familyMealName', n);
+            if(typeof window.opener.updateCurrentUserDisplay === 'function') window.opener.updateCurrentUserDisplay();
+          }catch(e){ console.warn('could not update parent', e); }
+          window.close();
         }
       <\/script>
     </body></html>
@@ -279,17 +400,262 @@ document.getElementById('member-btn').addEventListener('click', ()=>{
 });
 
 /* -------------------------
-   Navigation buttons
+   Admin login (only Chamya allowed)
 ------------------------- */
-document.getElementById('view-bills-btn').addEventListener('click', ()=> location.href='bill.html');
+document.getElementById('admin-login-btn').addEventListener('click', ()=> {
+  showModal(`
+    <h3>Admin Login</h3>
+    <label>PIN:</label>
+    <input id="admin-pin" type="password"/>
+    <button id="admin-login-go">Login</button>
+    <button id="admin-cancel" class="secondary">Cancel</button>
+  `);
+  document.getElementById('admin-cancel').onclick = closeModal;
+  document.getElementById('admin-login-go').onclick = ()=>{
+    const pin = document.getElementById('admin-pin').value.trim();
+    db.ref('admin/pin').once('value').then(snap=>{
+      const correct = snap.exists() ? snap.val() : '1234';
+      if(pin === correct){
+        // enforce that only Chamya may be admin
+        if(window.USER_NAME !== 'Chamya'){
+          alert('Only Chamya can be admin. Select Chamya as the active member first.');
+          return;
+        }
+        window.IS_ADMIN = true;
+        localStorage.setItem('isAdmin','true');
+        updateCurrentUserDisplay();
+        closeModal();
+        alert('Admin logged in as Chamya');
+        loadAllOrders();
+      } else {
+        alert('Wrong PIN');
+      }
+    }).catch(e=>{ console.error(e); alert('Error checking PIN'); });
+  };
+});
 
 /* -------------------------
-   Initialize
+   Coin display click behavior:
+   - If admin (Chamya): open Coin Summary modal (list all members, can add coins)
+   - If member: simple alert with own balance (no refill UI)
 ------------------------- */
-loadMenuFromFirebase(()=>{ 
-  renderMenu(); 
+coinDisplay.addEventListener('click', async ()=>{
+  if(window.IS_ADMIN && window.USER_NAME === 'Chamya'){
+    // show coin summary for all members with add button
+    showModal(`<h3>Coin Summary</h3><div id="coin-list" style="max-height:300px;overflow:auto;margin-top:8px"></div><button id="close-coins" class="secondary">Close</button>`);
+    document.getElementById('close-coins').onclick = closeModal;
+    const coinListEl = document.getElementById('coin-list');
+
+    // read current coin values for members
+    for(const m of MEMBERS){
+      const row = document.createElement('div');
+      row.className = 'coin-row';
+      row.innerHTML = `<div style="font-weight:700">${escapeHtml(m.display)}</div>
+                       <div id="bal-${escapeHtml(m.key)}">...</div>`;
+      coinListEl.appendChild(row);
+
+      const controls = document.createElement('div');
+      controls.style.display='flex';
+      controls.style.gap='8px';
+      controls.style.marginTop='6px';
+      controls.style.padding='6px';
+      controls.innerHTML = `<input id="add-${escapeHtml(m.key)}" type="number" min="1" placeholder="Add coins" />
+                            <button id="doadd-${escapeHtml(m.key)}" class="add-btn">Add</button>`;
+      coinListEl.appendChild(controls);
+
+      // wire add action
+      (function(key){
+        document.getElementById('doadd-'+key).addEventListener('click', ()=>{
+          const valEl = document.getElementById('add-'+key);
+          const amt = parseInt(valEl.value) || 0;
+          if(amt <= 0){ alert('Enter positive number'); return; }
+          addCoins(key, amt).then(()=>{ valEl.value=''; alert('Added '+amt+' coins to '+key); });
+        });
+      })(escapeHtml(m.key));
+    }
+
+    // realtime show balances for members
+    const balancesRef = db.ref('coins');
+    const updateBalances = (snap)=>{
+      const data = snap.val() || {};
+      for(const m of MEMBERS){
+        const el = document.getElementById('bal-'+escapeHtml(m.key));
+        if(el) el.textContent = (data[m.key] !== undefined) ? data[m.key] : INITIAL_COINS;
+      }
+    };
+    balancesRef.once('value').then(updateBalances);
+    // also attach listener so admin sees instant updates
+    balancesRef.on('value', updateBalances);
+
+    // stop listening when modal closes
+    const cleanUp = ()=> balancesRef.off('value', updateBalances);
+    // override close to cleanup
+    document.getElementById('close-coins').onclick = ()=>{
+      cleanUp();
+      closeModal();
+    };
+  } else {
+    // regular member: show own balance in a simple alert (no refill)
+    const bal = await getCoins(window.USER_NAME);
+    alert(`${window.USER_NAME} — ${bal} coins`);
+  }
 });
-modalBackdrop.onclick = (e)=>{ if(e.target===modalBackdrop) closeModal(); }
+
+/* -------------------------
+   Update coin display for current user (top-right)
+------------------------- */
+function updateCoinDisplay(){
+  getCoins(window.USER_NAME).then(c=>{
+    coinDisplay.textContent = `🪙 ${c}`;
+  }).catch(()=>{ coinDisplay.textContent = '🪙 -'; });
+}
+
+/* -------------------------
+   Build summary & order submission (same behavior)
+------------------------- */
+menuList.addEventListener('change', (e)=>{
+  if(e.target && e.target.matches('input[type="checkbox"]')){
+    updateSummary();
+  }
+});
+
+function collectSelected(){
+  const selected = {};
+  const boxes = menuList.querySelectorAll('input[type="checkbox"]');
+  boxes.forEach(b=>{
+    if(b.checked){
+      const section = b.getAttribute('data-section');
+      const id = b.getAttribute('data-id');
+      selected[id] = { section, id };
+    }
+  });
+  return selected;
+}
+
+function updateSummary(){
+  const sel = collectSelected();
+  let total = 0;
+  const listEl = document.createElement('div');
+  Object.values(sel).forEach(s=>{
+    const sec = window.MENU_SECTIONS[s.section] || {};
+    const item = sec[s.id] || {};
+    const name = item.name || s.id;
+    const coins = Number(item.coins) || 0;
+    total += coins;
+    const itemDiv = document.createElement('div');
+    itemDiv.className = 'summary-item';
+    itemDiv.textContent = `${name} — ${coins} coins`;
+    listEl.appendChild(itemDiv);
+  });
+  const totalDiv = document.createElement('div');
+  totalDiv.style.fontWeight = '700';
+  totalDiv.textContent = `Total: ${total} coins`;
+  listEl.appendChild(totalDiv);
+  summaryEl.innerHTML = '';
+  summaryEl.appendChild(listEl);
+}
+
+/* -------------------------
+   Submit order flow (same as before)
+------------------------- */
+submitBtn.addEventListener('click', async ()=>{
+  if(window.LOCKED){ alert('Orders are locked by admin.'); return; }
+  const sel = collectSelected();
+  const selKeys = Object.keys(sel);
+  if(selKeys.length === 0){ alert('Select at least one item.'); return; }
+
+  let cost = 0;
+  const items = [];
+  for(const k of selKeys){
+    const s = sel[k];
+    const it = (window.MENU_SECTIONS[s.section] || {})[s.id] || {};
+    const name = it.name || s.id;
+    const coins = Number(it.coins) || 0;
+    cost += coins;
+    items.push({ name, coins, section: s.section, id: s.id });
+  }
+
+  try{
+    const coinSnapshot = await db.ref('coins/'+encodeKey(window.USER_NAME)).once('value');
+    const curCoins = coinSnapshot.exists() ? Number(coinSnapshot.val()) : INITIAL_COINS;
+    if(curCoins < cost){
+      if(!confirm(`You have ${curCoins} coins but the order costs ${cost}. Top-up needed.`)) return;
+      alert('Only admin can top-up. Please ask Chamya to add coins.');
+      return;
+    }
+
+    const coinRef = db.ref('coins/'+encodeKey(window.USER_NAME));
+    await coinRef.transaction(curr=>{
+      if(curr === null) return (INITIAL_COINS - cost);
+      if(curr - cost < 0) return;
+      return curr - cost;
+    });
+
+    const dateKey = orderDateInput.value || new Date().toISOString().slice(0,10);
+    const orderRef = db.ref('orders/'+dateKey+'/'+encodeKey(window.USER_NAME));
+    const payload = { user: window.USER_NAME, items, total: cost, meal: document.getElementById('meal-type').value || 'Lunch', ts: Date.now() };
+    await orderRef.set(payload);
+
+    alert('Order submitted!');
+    updateCoinDisplay();
+    menuList.querySelectorAll('input[type="checkbox"]').forEach(b=>b.checked = false);
+    updateSummary();
+    if(window.IS_ADMIN) loadAllOrders();
+  }catch(e){ console.error(e); alert('Error submitting order'); }
+});
+
+/* -------------------------
+   Admin helpers: loadAllOrders, lock/unlock, reset
+------------------------- */
+function loadAllOrders(){
+  db.ref('orders').once('value').then(snap=>{
+    ordersListEl.innerHTML = '';
+    if(!snap.exists()){ ordersListEl.innerHTML = '<div style="opacity:.7">No orders</div>'; return; }
+    const allDates = snap.val() || {};
+    for(const [date, users] of Object.entries(allDates).sort().reverse()){
+      const dateH = document.createElement('div');
+      dateH.style.fontWeight='700'; dateH.style.marginTop='8px'; dateH.textContent = date;
+      ordersListEl.appendChild(dateH);
+      for(const [u, ord] of Object.entries(users)){
+        const div = document.createElement('div');
+        div.style.margin = '6px 0'; div.style.padding = '6px'; div.style.border = '1px solid #e6eefb'; div.style.borderRadius = '6px';
+        div.innerHTML = `<div><strong>${ord.user}</strong> — ${ord.meal || ''} — ${ord.total} coins</div>
+                         <div style="font-size:0.9em;color:#334155">${(ord.items || []).map(it=>it.name+'('+it.coins+')').join(', ')}</div>`;
+        ordersListEl.appendChild(div);
+      }
+    }
+  });
+}
+
+lockBtn.addEventListener('click', ()=>{
+  if(!window.IS_ADMIN){ alert('Admin only'); return; }
+  const newVal = !window.LOCKED;
+  db.ref('locked').set(newVal);
+});
+
+document.getElementById('reset-btn').addEventListener('click', ()=>{
+  if(!window.IS_ADMIN){ alert('Admin only'); return; }
+  if(!confirm('Reset ALL orders and coins? This will clear /orders and /coins in Firebase.')) return;
+  db.ref('orders').remove();
+  db.ref('coins').remove();
+  alert('Reset done.');
+  loadAllOrders();
+  updateCoinDisplay();
+});
+
+/* -------------------------
+   Initialize & realtime listeners
+------------------------- */
+loadMenuFromFirebase(()=>{ renderMenu(); updateSummary(); if(window.IS_ADMIN) loadAllOrders(); });
+
+db.ref('menu').on('value', snap=>{ window.MENU_SECTIONS = snap.val() || {}; renderMenu(); updateSummary(); });
+db.ref('orders').on('value', snap=>{ if(window.IS_ADMIN) loadAllOrders(); });
+// update top-right balance when user's coin changes
+db.ref('coins/'+encodeKey(window.USER_NAME)).on('value', snap=>{ if(snap.exists()) coinDisplay.textContent = '🪙 ' + snap.val(); });
+
+window.updateCurrentUserDisplay = updateCurrentUserDisplay;
+modalBackdrop.addEventListener('click', e=>{ if(e.target === modalBackdrop) closeModal(); });
+
 </script>
 </body>
 </html>
