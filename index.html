@@ -28,8 +28,7 @@ button.orange{background:#f97316;width:100%;padding:10px 12px;margin-top:8px}
 #lock-message{color:var(--danger);font-weight:700;margin-top:8px}
 #orders-list{max-height:240px;overflow:auto;padding:8px;border-radius:8px;background:#f3f6fb}
 .small-btn{padding:6px 8px;border-radius:6px;font-size:0.9em}
-.accept-btn{background:#16a34a;color:white;padding:5px 8px;border-radius:6px;margin-top:6px;margin-right:6px}
-.reject-btn{background:#dc2626;color:white;padding:5px 8px;border-radius:6px;margin-top:6px}
+.accept-btn{margin-left:8px}
 .summary-item{margin-bottom:6px;border-bottom:1px dashed #e6eefb;padding-bottom:6px}
 .edit-btn{background:transparent;color:#111;border:none;padding:2px 6px;border-radius:4px;cursor:pointer;font-size:0.8em;margin-left:6px}
 .modal-backdrop{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.5);display:none;align-items:center;justify-content:center;z-index:999}
@@ -38,7 +37,21 @@ button.orange{background:#f97316;width:100%;padding:10px 12px;margin-top:8px}
 .modal label{display:block;margin-top:8px;font-weight:600}
 .modal input{width:100%;padding:6px;margin-top:4px;border:1px solid #cbd5e1;border-radius:6px}
 .modal button{margin-top:10px;width:100%}
-#coin-display{position:fixed;top:20px;right:20px;background:linear-gradient(90deg,#fbbf24,#f59e0b);color:white;font-weight:700;padding:6px 12px;border-radius:12px;box-shadow:0 4px 12px rgba(0,0,0,0.1);z-index:999;cursor:pointer;}
+
+/* Top-right coin display */
+#coin-display{
+  position:fixed;
+  top:20px;
+  right:20px;
+  background:linear-gradient(90deg,#fbbf24,#f59e0b);
+  color:white;
+  font-weight:700;
+  padding:6px 12px;
+  border-radius:12px;
+  box-shadow:0 4px 12px rgba(0,0,0,0.1);
+  z-index:999;
+  cursor:pointer;
+}
 .coin-row{display:flex;justify-content:space-between;align-items:center;padding:8px;border-bottom:1px solid #eef2ff}
 .coin-row input[type="number"]{width:80px;padding:6px;border-radius:6px;border:1px solid #cbd5e1}
 .add-btn{padding:6px 8px;border-radius:6px}
@@ -102,60 +115,6 @@ button.orange{background:#f97316;width:100%;padding:10px 12px;margin-top:8px}
 </div>
 
 <script>
-/* ------------- FIREBASE + ALL YOUR ORIGINAL CODE ABOVE REMAINS UNCHANGED ------------- */
-
-/* -------------------------
-   CHANGED PART: loadAllOrders()
-------------------------- */
-function loadAllOrders(){
-  db.ref('orders').once('value').then(snap=>{
-    ordersListEl.innerHTML = '';
-    if(!snap.exists()){ ordersListEl.innerHTML = '<div style="opacity:.7">No orders</div>'; return; }
-    const allDates = snap.val() || {};
-
-    for(const [date, users] of Object.entries(allDates).sort().reverse()){
-      const dateH = document.createElement('div');
-      dateH.style.fontWeight='700'; dateH.style.marginTop='8px';
-      dateH.textContent = date;
-      ordersListEl.appendChild(dateH);
-
-      for(const [u, ord] of Object.entries(users)){
-        const div = document.createElement('div');
-        div.style.margin = '6px 0';
-        div.style.padding = '6px';
-        div.style.border = '1px solid #e6eefb';
-        div.style.borderRadius = '6px';
-
-        const status = ord.status || 'pending';
-
-        div.innerHTML = `
-          <div><strong>${ord.user}</strong> — ${ord.meal || ''} — ${ord.total} coins</div>
-          <div style="font-size:0.9em;color:#334155">${(ord.items || []).map(it=>it.name+'('+it.coins+')').join(', ')}</div>
-          <div style="margin-top:6px;font-weight:700">Status: ${status}</div>
-        `;
-
-        if(window.IS_ADMIN){
-          const acceptBtn = document.createElement('button');
-          acceptBtn.className = 'accept-btn';
-          acceptBtn.textContent = "✔️ Accept";
-          acceptBtn.onclick = ()=> db.ref(`orders/${date}/${u}/status`).set("accepted");
-
-          const rejectBtn = document.createElement('button');
-          rejectBtn.className = 'reject-btn';
-          rejectBtn.textContent = "❌ Reject";
-          rejectBtn.onclick = ()=> db.ref(`orders/${date}/${u}/status`).set("rejected");
-
-          div.appendChild(acceptBtn);
-          div.appendChild(rejectBtn);
-        }
-
-        ordersListEl.appendChild(div);
-      }
-    }
-  });
-}
-
-/* -------------------- REST OF YOUR SCRIPT STAYS EXACTLY THE SAME -------------------- */
 /* -------------------------
    Firebase initialization
 ------------------------- */
@@ -647,21 +606,58 @@ submitBtn.addEventListener('click', async ()=>{
 
 /* -------------------------
    Admin helpers: loadAllOrders, lock/unlock, reset
+   (Updated to include Accept/Reject buttons for admin)
 ------------------------- */
 function loadAllOrders(){
   db.ref('orders').once('value').then(snap=>{
     ordersListEl.innerHTML = '';
     if(!snap.exists()){ ordersListEl.innerHTML = '<div style="opacity:.7">No orders</div>'; return; }
     const allDates = snap.val() || {};
-    for(const [date, users] of Object.entries(allDates).sort().reverse()){
+    // sort dates descending for recent first
+    const entries = Object.entries(allDates).sort((a,b)=> b[0].localeCompare(a[0]));
+    for(const [date, users] of entries){
       const dateH = document.createElement('div');
       dateH.style.fontWeight='700'; dateH.style.marginTop='8px'; dateH.textContent = date;
       ordersListEl.appendChild(dateH);
+
       for(const [u, ord] of Object.entries(users)){
         const div = document.createElement('div');
         div.style.margin = '6px 0'; div.style.padding = '6px'; div.style.border = '1px solid #e6eefb'; div.style.borderRadius = '6px';
-        div.innerHTML = `<div><strong>${ord.user}</strong> — ${ord.meal || ''} — ${ord.total} coins</div>
-                         <div style="font-size:0.9em;color:#334155">${(ord.items || []).map(it=>it.name+'('+it.coins+')').join(', ')}</div>`;
+
+        const status = ord.status || 'pending';
+        div.innerHTML = `
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <div><strong>${ord.user}</strong> — ${ord.meal || ''} — ${ord.total} coins</div>
+            <div style="font-size:0.9em;font-weight:700;color:${status === 'accepted' ? '#16a34a' : status === 'rejected' ? '#dc2626' : '#334155'}">${status}</div>
+          </div>
+          <div style="font-size:0.9em;color:#334155;margin-top:6px">${(ord.items || []).map(it=>it.name+'('+it.coins+')').join(', ')}</div>
+        `;
+
+        if(window.IS_ADMIN){
+          // Accept button
+          const acceptBtn = document.createElement('button');
+          acceptBtn.className = 'accept-btn';
+          acceptBtn.textContent = "✔️ Accept";
+          acceptBtn.onclick = ()=>{
+            db.ref(`orders/${date}/${u}/status`).set("accepted").then(()=>{ loadAllOrders(); });
+          };
+
+          // Reject button
+          const rejectBtn = document.createElement('button');
+          rejectBtn.className = 'accept-btn';
+          rejectBtn.textContent = "❌ Reject";
+          rejectBtn.onclick = ()=>{
+            db.ref(`orders/${date}/${u}/status`).set("rejected").then(()=>{ loadAllOrders(); });
+          };
+
+          // Add buttons to a container
+          const btnWrap = document.createElement('div');
+          btnWrap.style.marginTop = '8px';
+          btnWrap.appendChild(acceptBtn);
+          btnWrap.appendChild(rejectBtn);
+          div.appendChild(btnWrap);
+        }
+
         ordersListEl.appendChild(div);
       }
     }
@@ -696,6 +692,7 @@ db.ref('coins/'+encodeKey(window.USER_NAME)).on('value', snap=>{ if(snap.exists(
 
 window.updateCurrentUserDisplay = updateCurrentUserDisplay;
 modalBackdrop.addEventListener('click', e=>{ if(e.target === modalBackdrop) closeModal(); });
+
 </script>
 </body>
 </html>
