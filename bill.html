@@ -58,6 +58,9 @@ h1 {
   border-radius: 8px;
   margin-bottom: 16px;
 }
+.debug-pre {
+  background:#fff6e6;border:1px solid #f0d9b7;padding:10px;border-radius:8px;max-height:240px;overflow:auto;font-family:monospace;font-size:12px;
+}
 </style>
 </head>
 <body>
@@ -71,6 +74,9 @@ h1 {
 
   <div id="coin-summary" class="coin-summary"></div>
   <div id="summary"></div>
+
+  <!-- debug area -->
+  <div id="debug-area" style="margin-top:12px"></div>
 
   <div style="margin-top:16px;text-align:right">
     <button onclick="location.href='index.html'">← Back</button>
@@ -100,6 +106,12 @@ let IS_ADMIN = false;
 const summaryEl = document.getElementById('summary');
 const adminStatus = document.getElementById('admin-status');
 const coinSummaryEl = document.getElementById('coin-summary');
+const debugArea = document.getElementById('debug-area');
+
+/* escape for HTML display */
+function escapeHtml(s){
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
 
 /* -------------------------------
    Admin login
@@ -115,13 +127,15 @@ document.getElementById('admin-login-btn').addEventListener('click', ()=>{
 
 /* -------------------------------
    Load and render bills (reordered)
-   - Flatten entries, compute timestamps
-   - Sort rows by timestamp (newest first)
-   - Compute subtotals, then sort payers by subtotal (desc)
 --------------------------------*/
 function renderBills(){
+  summaryEl.innerHTML = '<i>Loading…</i>';
+  coinSummaryEl.innerHTML = '';
+
   db.ref('bills').once('value').then(snap=>{
     const data = snap.val() || {};
+    console.log('bills snapshot:', data);
+
     const entries = [];
 
     // Flatten all accepted entries into an array with timestamps
@@ -146,21 +160,28 @@ function renderBills(){
               time: timeKey,
               amount: Number(entry.amount || 0),
               orderUser: entry.orderUser || '',
-              ts: isNaN(ts) ? 0 : ts
+              ts: isNaN(ts) ? 0 : ts,
+              rawEntry: entry
             });
           }
         }
       }
     }
 
+    console.log('flattened entries:', entries);
+
     if(entries.length === 0){
       summaryEl.innerHTML = '<i>No accepted bills yet.</i>';
+      // show raw DB to help debug — useful to inspect whether data is present but not matching the expected shape
+      debugArea.innerHTML = '<div style="font-weight:700;margin-bottom:6px">Raw bills node (for debugging):</div>'
+        + '<pre class="debug-pre">' + escapeHtml(JSON.stringify(data, null, 2)) + '</pre>'
+        + '<div style="margin-top:6px;font-size:13px;color:#555">Check that your accepted order is under bills/{payer}/{date}/{time} and includes "accepted": true and "amount".</div>';
       coinSummaryEl.innerHTML = '<i>No coins yet recorded.</i>';
       return;
     }
+    debugArea.innerHTML = ''; // clear debug area if entries found
 
     // Group by payer after sorting rows, and compute subtotals
-    // First sort rows (newest first)
     entries.sort((a,b)=>b.ts - a.ts);
 
     const byPayer = {};
@@ -171,11 +192,9 @@ function renderBills(){
       subtotals[e.payer] = (subtotals[e.payer] || 0) + Number(e.amount || 0);
     });
 
-    // Now build payer list sorted by subtotal descending (so biggest payers first)
     const payersSorted = Object.keys(byPayer)
       .sort((a,b)=> (subtotals[b] || 0) - (subtotals[a] || 0) );
 
-    // helper to escape single quotes for inline onclick attributes
     function escAttr(s){
       return String(s).replace(/'/g, "\\'").replace(/\n/g, ' ');
     }
@@ -189,7 +208,6 @@ function renderBills(){
       html += `<div class="payer"><div style="font-weight:700">${payer}</div>`;
       rows.forEach(r=>{
         subtotal += Number(r.amount || 0);
-        // escape attributes used inside single quotes
         const payerEsc = escAttr(r.payer);
         const dateEsc = escAttr(r.date);
         const timeEsc = escAttr(r.time);
@@ -211,7 +229,7 @@ function renderBills(){
 
     summaryEl.innerHTML = html;
 
-    // Build coin summary from subtotals (use sorted payers order)
+    // Build coin summary from subtotals
     const totalCoins = {};
     for(const p of Object.keys(subtotals)){
       totalCoins[p] = subtotals[p];
@@ -219,8 +237,9 @@ function renderBills(){
     renderCoinSummary(totalCoins);
   }).catch(err=>{
     console.error('Error loading bills:', err);
-    summaryEl.innerHTML = '<i>Error loading bills.</i>';
+    summaryEl.innerHTML = '<i>Error loading bills. See console for details.</i>';
     coinSummaryEl.innerHTML = '';
+    debugArea.innerHTML = '<div style="color:#900;margin-top:8px"><b>Read error:</b> ' + escapeHtml(String(err)) + '</div>';
   });
 }
 
@@ -235,7 +254,6 @@ function renderCoinSummary(coinData){
   let html = '<h3>💰 Total Coins (Paid Amounts)</h3>';
   html += '<ul style="list-style:none;padding:0">';
   let totalAll = 0;
-  // Sort coin display by amount desc for a cleaner summary
   const items = Object.entries(coinData).sort((a,b)=>b[1]-a[1]);
   for(const [payer, amount] of items){
     html += `<li style="margin-bottom:4px">${payer}: <b>${Number(amount).toFixed(2)} coins</b></li>`;
