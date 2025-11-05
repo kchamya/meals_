@@ -101,6 +101,7 @@ button.orange{background:#f97316;width:100%;padding:10px 12px;margin-top:8px}
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
           <button id="lock-btn" class="secondary small-btn">Lock Orders</button>
           <button id="reset-btn" class="secondary small-btn">Reset All</button>
+          <button id="reload-orders-btn" class="secondary small-btn" style="display:none">Reload Orders</button>
         </div>
         <h4 style="margin:8px 0">All Orders</h4>
         <div id="orders-list"></div>
@@ -145,6 +146,7 @@ window.MENU_SECTIONS = {};
 window.USER_NAME = localStorage.getItem('familyMealName') || "Guest";
 window.IS_ADMIN = localStorage.getItem('isAdmin') === 'true' && window.USER_NAME === 'Chamya';
 window.LOCKED = false;
+window.UI_ORDERS_CLEARED = false; // <-- new flag: when true, admin cleared the interface only
 const INITIAL_COINS = 100;
 
 const menuList = document.getElementById('menu-list');
@@ -160,6 +162,7 @@ const modalBackdrop = document.getElementById('modal-backdrop');
 const modalContent = document.getElementById('modal-content');
 const coinDisplay = document.getElementById('coin-display');
 const orderDateInput = document.getElementById('order-date');
+const reloadOrdersBtn = document.getElementById('reload-orders-btn');
 
 orderDateInput.value = new Date().toISOString().slice(0,10);
 
@@ -171,6 +174,8 @@ function updateCurrentUserDisplay(){
   updateCoinDisplay();
   adminSection.style.display = window.IS_ADMIN ? 'block' : 'none';
   addSectionBtn.style.display = window.IS_ADMIN ? 'inline-block' : 'none';
+  // show reload button only to admin
+  if(reloadOrdersBtn) reloadOrdersBtn.style.display = window.IS_ADMIN ? 'inline-block' : 'none';
 }
 updateCurrentUserDisplay();
 
@@ -426,6 +431,8 @@ document.getElementById('admin-login-btn').addEventListener('click', ()=> {
         updateCurrentUserDisplay();
         closeModal();
         alert('Admin logged in as Chamya');
+        // when admin logs in, restore UI cleared flag to false so they can see orders
+        window.UI_ORDERS_CLEARED = false;
         loadAllOrders();
       } else {
         alert('Wrong PIN');
@@ -605,10 +612,26 @@ submitBtn.addEventListener('click', async ()=>{
 });
 
 /* -------------------------
+   View bills button handler
+   - Opens bill.html in a new tab and passes date & user as query params
+   - bill.html can read ?date=YYYY-MM-DD&user=Name
+------------------------- */
+document.getElementById('view-bills-btn').addEventListener('click', ()=>{
+  // use selected date (orderDateInput is disabled but has a value) or today
+  const dateKey = orderDateInput.value || new Date().toISOString().slice(0,10);
+  const url = 'bill.html?date=' + encodeURIComponent(dateKey) + '&user=' + encodeURIComponent(window.USER_NAME);
+  window.open(url, '_blank');
+});
+
+/* -------------------------
    Admin helpers: loadAllOrders, lock/unlock, reset
-   (Updated to include Accept/Reject buttons for admin)
+   - IMPORTANT CHANGE: "Reset All" now clears only the admin interface (does NOT touch Firebase).
+   - A new "Reload Orders" button lets admin bring the orders back from Firebase.
 ------------------------- */
 function loadAllOrders(){
+  // if admin previously cleared the interface, don't auto-repopulate until they explicitly reload
+  if(window.UI_ORDERS_CLEARED) return;
+
   db.ref('orders').once('value').then(snap=>{
     ordersListEl.innerHTML = '';
     if(!snap.exists()){ ordersListEl.innerHTML = '<div style="opacity:.7">No orders</div>'; return; }
@@ -672,13 +695,24 @@ lockBtn.addEventListener('click', ()=>{
 
 document.getElementById('reset-btn').addEventListener('click', ()=>{
   if(!window.IS_ADMIN){ alert('Admin only'); return; }
-  if(!confirm('Reset ALL orders and coins? This will clear /orders and /coins in Firebase.')) return;
-  db.ref('orders').remove();
-  db.ref('coins').remove();
-  alert('Reset done.');
-  loadAllOrders();
-  updateCoinDisplay();
+  if(!confirm('Clear ALL orders from the admin interface only? This will NOT modify Firebase orders or coins.')) return;
+
+  // Mark that admin cleared the UI: this prevents the realtime "orders" listener from repopulating the UI.
+  window.UI_ORDERS_CLEARED = true;
+  ordersListEl.innerHTML = '<div style="opacity:.7">Orders cleared from interface by admin (Firebase data unchanged).</div>';
+
+  alert('Interface cleared. Firebase orders and coin balances were NOT changed.');
 });
+
+if(reloadOrdersBtn){
+  reloadOrdersBtn.addEventListener('click', ()=>{
+    if(!window.IS_ADMIN){ alert('Admin only'); return; }
+    // allow repopulating the UI again and fetch live orders
+    window.UI_ORDERS_CLEARED = false;
+    loadAllOrders();
+    alert('Orders reloaded from Firebase.');
+  });
+}
 
 /* -------------------------
    Initialize & realtime listeners
@@ -686,7 +720,8 @@ document.getElementById('reset-btn').addEventListener('click', ()=>{
 loadMenuFromFirebase(()=>{ renderMenu(); updateSummary(); if(window.IS_ADMIN) loadAllOrders(); });
 
 db.ref('menu').on('value', snap=>{ window.MENU_SECTIONS = snap.val() || {}; renderMenu(); updateSummary(); });
-db.ref('orders').on('value', snap=>{ if(window.IS_ADMIN) loadAllOrders(); });
+// only auto-load orders if admin and they have NOT cleared the UI
+db.ref('orders').on('value', snap=>{ if(window.IS_ADMIN && !window.UI_ORDERS_CLEARED) loadAllOrders(); });
 // update top-right balance when user's coin changes
 db.ref('coins/'+encodeKey(window.USER_NAME)).on('value', snap=>{ if(snap.exists()) coinDisplay.textContent = '🪙 ' + snap.val(); });
 
