@@ -52,18 +52,13 @@ button.orange{background:#f97316;width:100%;padding:10px 12px;margin-top:8px}
   z-index:999;
   cursor:pointer;
 }
-.coin-row{display:flex;justify-content:space-between;align-items:center;padding:8px;border-bottom:1px solid #eef2ff'}
+.coin-row{display:flex;justify-content:space-between;align-items:center;padding:8px;border-bottom:1px solid #eef2ff}
 .coin-row input[type="number"]{width:80px;padding:6px;border-radius:6px;border:1px solid #cbd5e1}
 .add-btn{padding:6px 8px;border-radius:6px}
 
 /* Dim accepted orders */
 .order-accepted{opacity:0.6;color:#475569}
 .order-pending{opacity:1;color:#0f172a}
-
-/* Simple table for bills */
-.table{width:100%;border-collapse:collapse}
-.table th,.table td{border:1px solid #e6eefb;padding:8px;text-align:left}
-.table th{background:#f8fafc;font-weight:700}
 </style>
 </head>
 <body>
@@ -102,8 +97,7 @@ button.orange{background:#f97316;width:100%;padding:10px 12px;margin-top:8px}
 
       <div style="margin-top:10px">
         <button id="submit-btn" class="green">✅ SEND</button>
-        <!-- replaced View Bills with Past Orders for members -->
-        <button id="past-orders-btn" class="orange">📜 Past Orders</button>
+        <button id="view-bills-btn" class="orange">🧾 View Bills</button>
       </div>
 
       <div class="card admin-section" id="admin-section" style="display:none;margin-top:12px">
@@ -112,8 +106,6 @@ button.orange{background:#f97316;width:100%;padding:10px 12px;margin-top:8px}
           <button id="lock-btn" class="secondary small-btn">Lock Orders</button>
           <button id="reset-btn" class="secondary small-btn">Reset All</button>
           <button id="reload-orders-btn" class="secondary small-btn" style="display:none">Reload Orders</button>
-          <!-- admin-only bills summary -->
-          <button id="bills-btn" class="secondary small-btn" style="display:none">Bills</button>
         </div>
         <h4 style="margin:8px 0">All Orders</h4>
         <div id="orders-list"></div>
@@ -177,9 +169,6 @@ const orderDateInput = document.getElementById('order-date');
 const reloadOrdersBtn = document.getElementById('reload-orders-btn');
 const resetBtn = document.getElementById('reset-btn');
 
-const pastOrdersBtn = document.getElementById('past-orders-btn');
-const billsBtn = document.getElementById('bills-btn');
-
 orderDateInput.value = new Date().toISOString().slice(0,10);
 
 /* -------------------------
@@ -195,8 +184,6 @@ function updateCurrentUserDisplay(){
   // show Clear All Orders label only to admin
   if(resetBtn) resetBtn.style.display = window.IS_ADMIN ? 'inline-block' : 'none';
   if(resetBtn) resetBtn.textContent = window.IS_ADMIN ? 'Clear All Orders' : 'Reset All';
-  // show bills button only to admin
-  if(billsBtn) billsBtn.style.display = window.IS_ADMIN ? 'inline-block' : 'none';
 }
 updateCurrentUserDisplay();
 
@@ -344,7 +331,7 @@ addSectionBtn.onclick = ()=>{
   document.getElementById('add-sec-btn').onclick = ()=>{
     const name = document.getElementById('new-section-name').value.trim();
     if(!name){ alert('Enter section name'); return; }
-    db.ref('menu/'+name).set({}).then(()=>{ 
+    db.ref('menu/'+name).set({}).then(()=>{
       window.MENU_SECTIONS[name] = {};
       renderMenu();
       closeModal();
@@ -633,223 +620,16 @@ submitBtn.addEventListener('click', async ()=>{
 });
 
 /* -------------------------
-   Past Orders (member)
-   - Opens a popup window that shows the current user's past orders grouped by date
-   - Shows a bottom line with total coins spent by that user
+   View bills button handler
+   - Opens bill.html in a new tab and passes date & user as query params
+   - bill.html can read ?date=YYYY-MM-DD&user=Name
 ------------------------- */
-pastOrdersBtn.addEventListener('click', ()=>{
-  const user = window.USER_NAME || 'Guest';
-  const encUser = encodeKey(user);
-  const win = window.open('', '_blank', 'width=700,height=600,scrollbars=yes');
-  const html = `
-  <!doctype html>
-  <html>
-  <head>
-    <meta charset="utf-8"/>
-    <title>Past Orders - ${escapeHtml(user)}</title>
-    <meta name="viewport" content="width=device-width,initial-scale=1"/>
-    <script src="https://www.gstatic.com/firebasejs/10.14.0/firebase-app-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/10.14.0/firebase-database-compat.js"></script>
-    <style>
-      body{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial;padding:16px;background:#f7fbff;color:#0f172a}
-      h2{margin-top:0}
-      .card{background:white;padding:12px;border-radius:8px;box-shadow:0 6px 18px rgba(2,6,23,0.06);margin-bottom:12px}
-      .items{font-size:0.95em;color:#334155}
-      .total{font-weight:800;margin-top:12px;padding-top:10px;border-top:1px dashed #e6eefb}
-    </style>
-  </head>
-  <body>
-    <h2>Past Orders — ${escapeHtml(user)}</h2>
-    <div id="content">Loading...</div>
-    <script>
-      const firebaseConfig = ${JSON.stringify(firebaseConfig)};
-      firebase.initializeApp(firebaseConfig);
-      const db = firebase.database();
-      const encUser = ${JSON.stringify(encUser)};
-      const userDisplay = ${JSON.stringify(user)};
-      function formatDate(d){ return d; }
-      db.ref('orders').once('value').then(snap=>{
-        const all = snap.val() || {};
-        const content = document.getElementById('content');
-        const dates = Object.keys(all).sort((a,b)=> b.localeCompare(a)); // newest first
-        let totalSpent = 0;
-        content.innerHTML = '';
-        for(const date of dates){
-          const users = all[date] || {};
-          if(!users[encUser]) continue;
-          const ord = users[encUser];
-          const card = document.createElement('div');
-          card.className = 'card';
-          const d = document.createElement('div');
-          d.innerHTML = '<strong>' + date + '</strong> — ' + (ord.meal || '') + ' — ' + (ord.total || 0) + ' coins';
-          card.appendChild(d);
-          const itemsDiv = document.createElement('div');
-          itemsDiv.className = 'items';
-          if(ord.items && ord.items.length){
-            itemsDiv.innerHTML = ord.items.map(it=> escapeHtml(it.name) + ' ('+ (it.coins||0) +' coins)').join('<br/>');
-          } else {
-            itemsDiv.textContent = '(no items recorded)';
-          }
-          card.appendChild(itemsDiv);
-          if(ord.ts){
-            const t = new Date(ord.ts);
-            const tsDiv = document.createElement('div');
-            tsDiv.style.fontSize='0.85em'; tsDiv.style.marginTop='8px'; tsDiv.style.color='#64748b';
-            tsDiv.textContent = 'Submitted: ' + t.toLocaleString();
-            card.appendChild(tsDiv);
-          }
-          content.appendChild(card);
-          totalSpent += Number(ord.total || 0);
-        }
-        const tot = document.createElement('div');
-        tot.className = 'total';
-        tot.textContent = 'Total coins spent by ' + userDisplay + ': ' + totalSpent + ' coins';
-        content.appendChild(tot);
-        if(content.innerHTML === ''){
-          content.textContent = 'No past orders found for ' + userDisplay;
-        }
-      }).catch(e=>{
-        document.getElementById('content').textContent = 'Error loading past orders';
-        console.error(e);
-      });
-
-      function escapeHtml(s){ if(s==null) return ''; return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-    <\/script>
-  </body>
-  </html>
-  `;
-  win.document.write(html);
-  win.document.close();
+document.getElementById('view-bills-btn').addEventListener('click', ()=>{
+  // use selected date (orderDateInput is disabled but has a value) or today
+  const dateKey = orderDateInput.value || new Date().toISOString().slice(0,10);
+  const url = 'bill.html?date=' + encodeURIComponent(dateKey) + '&user=' + encodeURIComponent(window.USER_NAME);
+  window.open(url, '_blank');
 });
-
-/* -------------------------
-   Admin Bills (summary for all members)
-   - Admin-only popup that shows each member's past orders and total spent
-------------------------- */
-if(billsBtn){
-  billsBtn.addEventListener('click', ()=>{
-    if(!window.IS_ADMIN){ alert('Admin only'); return; }
-    const win = window.open('', '_blank', 'width=900,height=700,scrollbars=yes');
-    const html = `
-    <!doctype html>
-    <html>
-    <head>
-      <meta charset="utf-8"/>
-      <title>Admin — Bills Summary</title>
-      <meta name="viewport" content="width=device-width,initial-scale=1"/>
-      <script src="https://www.gstatic.com/firebasejs/10.14.0/firebase-app-compat.js"></script>
-      <script src="https://www.gstatic.com/firebasejs/10.14.0/firebase-database-compat.js"></script>
-      <style>
-        body{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial;padding:16px;background:#f7fbff;color:#0f172a}
-        h2{margin-top:0}
-        .card{background:white;padding:12px;border-radius:8px;box-shadow:0 6px 18px rgba(2,6,23,0.06);margin-bottom:12px}
-        .member-row{display:flex;justify-content:space-between;align-items:center;padding:8px;border-bottom:1px solid #eef2ff}
-        .items{font-size:0.95em;color:#334155}
-        .total{font-weight:800;margin-top:12px;padding-top:10px;border-top:1px dashed #e6eefb}
-        table.table{width:100%;border-collapse:collapse;margin-top:8px}
-        table.table th, table.table td{border:1px solid #e6eefb;padding:8px;text-align:left}
-        table.table th{background:#f8fafc}
-      </style>
-    </head>
-    <body>
-      <h2>Admin — Bills Summary</h2>
-      <div id="content">Loading...</div>
-      <script>
-        const firebaseConfig = ${JSON.stringify(firebaseConfig)};
-        firebase.initializeApp(firebaseConfig);
-        const db = firebase.database();
-        const MEMBERS = ${JSON.stringify(MEMBERS)};
-        function encodeKey(s){ return String(s).replace(/\\./g,'_'); }
-        function escapeHtml(s){ if(s==null) return ''; return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-        db.ref('orders').once('value').then(snap=>{
-          const all = snap.val() || {};
-          const content = document.getElementById('content');
-          content.innerHTML = '';
-          // prepare per-member summary
-          const per = {};
-          for(const m of MEMBERS){
-            per[m.key] = { display: m.display, key: m.key, orders: [], total: 0 };
-          }
-          // collect orders
-          for(const [date, users] of Object.entries(all)){
-            for(const [u, ord] of Object.entries(users || {})){
-              // attempt to find matching member by encoded key OR by ord.user name fallback
-              const matchedKey = Object.keys(per).indexOf(u) >= 0 ? u : (ord && ord.user && per[encodeKey(ord.user)] ? encodeKey(ord.user) : null);
-              if(matchedKey && per[matchedKey]){
-                per[matchedKey].orders.push(Object.assign({ date }, ord));
-                per[matchedKey].total += Number(ord.total || 0);
-              } else {
-                // unknown user: include in "Others"
-                if(!per['__others']) per['__others'] = { display: 'Others', key: '__others', orders: [], total: 0 };
-                per['__others'].orders.push(Object.assign({ date }, ord));
-                per['__others'].total += Number(ord.total || 0);
-              }
-            }
-          }
-
-          // show a table summary
-          const tbl = document.createElement('table');
-          tbl.className = 'table';
-          tbl.style.width='100%';
-          tbl.innerHTML = '<thead><tr><th>Member</th><th># Orders</th><th>Total Spent (coins)</th><th>Actions</th></tr></thead><tbody></tbody>';
-          const tbody = tbl.querySelector('tbody');
-          for(const k of Object.keys(per)){
-            const entry = per[k];
-            const tr = document.createElement('tr');
-            tr.innerHTML = '<td>' + escapeHtml(entry.display) + '</td><td>' + entry.orders.length + '</td><td>' + entry.total + '</td><td><button class="view-orders" data-key="'+escapeHtml(entry.key)+'">View</button></td>';
-            tbody.appendChild(tr);
-          }
-          content.appendChild(tbl);
-
-          // buttons to view each member's detailed list
-          content.addEventListener('click', (e)=>{
-            if(e.target && e.target.matches('button.view-orders')){
-              const key = e.target.getAttribute('data-key');
-              const entry = per[key];
-              if(!entry) return;
-              // open a modal-ish new window showing orders for this member
-              const w = window.open('', '_blank', 'width=720,height=600,scrollbars=yes');
-              let inner = '<!doctype html><html><head><meta charset="utf-8"/><title>Orders - '+escapeHtml(entry.display)+'</title><meta name="viewport" content="width=device-width,initial-scale=1"/><style>body{font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,Arial;padding:16px;background:#f7fbff;color:#0f172a} .card{background:white;padding:12px;border-radius:8px;margin-bottom:10px} .items{font-size:0.95em;color:#334155} .total{font-weight:800;margin-top:12px;padding-top:10px;border-top:1px dashed #e6eef2}</style></head><body>';
-              inner += '<h3>Orders for '+escapeHtml(entry.display)+'</h3>';
-              if(entry.orders.length === 0){
-                inner += '<div>No orders found.</div>';
-              } else {
-                entry.orders.sort((a,b)=> b.date.localeCompare(a.date));
-                for(const ord of entry.orders){
-                  inner += '<div class="card"><div><strong>'+escapeHtml(ord.date)+'</strong> — '+escapeHtml(ord.meal||'')+' — '+(ord.total||0)+' coins</div>';
-                  if(ord.items && ord.items.length){
-                    inner += '<div class="items">'+ ord.items.map(it=> escapeHtml(it.name) + ' ('+(it.coins||0)+' coins)').join('<br/>') + '</div>';
-                  }
-                  if(ord.ts){
-                    inner += '<div style="font-size:0.85em;color:#64748b;margin-top:8px">Submitted: ' + new Date(ord.ts).toLocaleString() + '</div>';
-                  }
-                  inner += '</div>';
-                }
-                inner += '<div class="total">Total spent by '+escapeHtml(entry.display)+': ' + entry.total + ' coins</div>';
-              }
-              inner += '</body></html>';
-              w.document.write(inner);
-              w.document.close();
-            }
-          });
-
-        }).catch(e=>{
-          document.getElementById('content').textContent = 'Error loading bills summary';
-          console.error(e);
-        });
-      <\/script>
-    </body>
-    </html>
-    `;
-    win.document.write(html);
-    win.document.close();
-  });
-}
-
-/* -------------------------
-   View bills button handler (removed) — old behavior replaced by Past Orders
-------------------------- */
-/* document.getElementById('view-bills-btn').addEventListener('click', ()=>{ ... }); */
 
 /* -------------------------
    Admin helpers: loadAllOrders, lock/unlock, reset
