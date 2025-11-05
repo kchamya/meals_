@@ -55,6 +55,10 @@ button.orange{background:#f97316;width:100%;padding:10px 12px;margin-top:8px}
 .coin-row{display:flex;justify-content:space-between;align-items:center;padding:8px;border-bottom:1px solid #eef2ff}
 .coin-row input[type="number"]{width:80px;padding:6px;border-radius:6px;border:1px solid #cbd5e1}
 .add-btn{padding:6px 8px;border-radius:6px}
+
+/* Dim accepted orders */
+.order-accepted{opacity:0.6;color:#475569}
+.order-pending{opacity:1;color:#0f172a}
 </style>
 </head>
 <body>
@@ -163,6 +167,7 @@ const modalContent = document.getElementById('modal-content');
 const coinDisplay = document.getElementById('coin-display');
 const orderDateInput = document.getElementById('order-date');
 const reloadOrdersBtn = document.getElementById('reload-orders-btn');
+const resetBtn = document.getElementById('reset-btn');
 
 orderDateInput.value = new Date().toISOString().slice(0,10);
 
@@ -176,6 +181,9 @@ function updateCurrentUserDisplay(){
   addSectionBtn.style.display = window.IS_ADMIN ? 'inline-block' : 'none';
   // show reload button only to admin
   if(reloadOrdersBtn) reloadOrdersBtn.style.display = window.IS_ADMIN ? 'inline-block' : 'none';
+  // show Clear All Orders label only to admin
+  if(resetBtn) resetBtn.style.display = window.IS_ADMIN ? 'inline-block' : 'none';
+  if(resetBtn) resetBtn.textContent = window.IS_ADMIN ? 'Clear All Orders' : 'Reset All';
 }
 updateCurrentUserDisplay();
 
@@ -587,7 +595,7 @@ submitBtn.addEventListener('click', async ()=>{
     const curCoins = coinSnapshot.exists() ? Number(coinSnapshot.val()) : INITIAL_COINS;
     if(curCoins < cost){
       if(!confirm(`You have ${curCoins} coins but the order costs ${cost}. Top-up needed.`)) return;
-      alert('Only admin can top-up. Please ask Chamya to add coins.');
+      alert('Only admin can top-up. Please ask Chamya to add coins.' );
       return;
     }
 
@@ -625,8 +633,8 @@ document.getElementById('view-bills-btn').addEventListener('click', ()=>{
 
 /* -------------------------
    Admin helpers: loadAllOrders, lock/unlock, reset
-   - IMPORTANT CHANGE: "Reset All" now clears only the admin interface (does NOT touch Firebase).
-   - A new "Reload Orders" button lets admin bring the orders back from Firebase.
+   - CHANGED: "Clear All Orders" (admin only) removes rejected orders from Firebase.
+   - loadAllOrders now orders: pending first, accepted last. Accepted orders are dimmed.
 ------------------------- */
 function loadAllOrders(){
   // if admin previously cleared the interface, don't auto-repopulate until they explicitly reload
@@ -643,15 +651,42 @@ function loadAllOrders(){
       dateH.style.fontWeight='700'; dateH.style.marginTop='8px'; dateH.textContent = date;
       ordersListEl.appendChild(dateH);
 
-      for(const [u, ord] of Object.entries(users)){
+      // Convert users object into array and sort by status:
+      // pending/undefined first (rank 0), accepted last (rank 1)
+      const userEntries = Object.entries(users || {});
+      const statusRank = (s)=> {
+        if(!s || s === 'pending') return 0;
+        if(s === 'accepted') return 1;
+        // any other statuses (including 'rejected') go after pending but before accepted
+        return 0;
+      };
+      userEntries.sort((a,b)=>{
+        const ra = statusRank(a[1].status);
+        const rb = statusRank(b[1].status);
+        if(ra !== rb) return ra - rb;
+        // keep original order for same rank
+        return 0;
+      });
+
+      for(const [u, ord] of userEntries){
+        // Skip rejected if for some reason still present (clear operation should have removed them)
+        const status = ord.status || 'pending';
+        if(status === 'rejected') continue;
+
         const div = document.createElement('div');
         div.style.margin = '6px 0'; div.style.padding = '6px'; div.style.border = '1px solid #e6eefb'; div.style.borderRadius = '6px';
 
-        const status = ord.status || 'pending';
+        // Apply dimming for accepted orders
+        if(status === 'accepted'){
+          div.classList.add('order-accepted');
+        } else {
+          div.classList.add('order-pending');
+        }
+
         div.innerHTML = `
           <div style="display:flex;justify-content:space-between;align-items:center">
             <div><strong>${ord.user}</strong> — ${ord.meal || ''} — ${ord.total} coins</div>
-            <div style="font-size:0.9em;font-weight:700;color:${status === 'accepted' ? '#16a34a' : status === 'rejected' ? '#dc2626' : '#334155'}">${status}</div>
+            <div style="font-size:0.9em;font-weight:700;color:${status === 'accepted' ? '#475569' : '#334155'}">${status}</div>
           </div>
           <div style="font-size:0.9em;color:#334155;margin-top:6px">${(ord.items || []).map(it=>it.name+'('+it.coins+')').join(', ')}</div>
         `;
@@ -687,23 +722,58 @@ function loadAllOrders(){
   });
 }
 
+/* -------------------------
+   Lock/unlock button
+------------------------- */
 lockBtn.addEventListener('click', ()=>{
   if(!window.IS_ADMIN){ alert('Admin only'); return; }
   const newVal = !window.LOCKED;
   db.ref('locked').set(newVal);
 });
 
-document.getElementById('reset-btn').addEventListener('click', ()=>{
-  if(!window.IS_ADMIN){ alert('Admin only'); return; }
-  if(!confirm('Clear ALL orders from the admin interface only? This will NOT modify Firebase orders or coins.')) return;
+/* -------------------------
+   Clear All Orders (formerly Reset All)
+   - Admin-only action.
+   - Removes rejected orders from Firebase and reloads the list.
+------------------------- */
+if(resetBtn){
+  resetBtn.textContent = 'Clear All Orders';
+  resetBtn.addEventListener('click', async ()=>{
+    if(!window.IS_ADMIN){ alert('Admin only'); return; }
+    if(!confirm('Clear all orders: this will permanently remove all rejected orders from Firebase. Accepted and pending orders will remain. Proceed?')) return;
+    try{
+      const snap = await db.ref('orders').once('value');
+      if(!snap.exists()){
+        alert('No orders to clear.');
+        return;
+      }
+      const all = snap.val() || {};
+      const updates = {};
+      for(const [date, users] of Object.entries(all)){
+        for(const [u, ord] of Object.entries(users || {})){
+          const status = ord.status || 'pending';
+          if(status === 'rejected'){
+            updates[`/orders/${date}/${u}`] = null;
+          }
+        }
+      }
+      if(Object.keys(updates).length > 0){
+        await db.ref().update(updates);
+      }
+      // ensure UI cleared flag is false so admin sees updated list
+      window.UI_ORDERS_CLEARED = false;
+      loadAllOrders();
+      alert('Rejected orders removed. Accepted orders will be dimmed and shown after pending orders.');
+    }catch(e){
+      console.error(e);
+      alert('Error clearing orders');
+    }
+  });
+}
 
-  // Mark that admin cleared the UI: this prevents the realtime "orders" listener from repopulating the UI.
-  window.UI_ORDERS_CLEARED = true;
-  ordersListEl.innerHTML = '<div style="opacity:.7">Orders cleared from interface by admin (Firebase data unchanged).</div>';
-
-  alert('Interface cleared. Firebase orders and coin balances were NOT changed.');
-});
-
+/* -------------------------
+   Reload orders button
+------------------------- */
 if(reloadOrdersBtn){
   reloadOrdersBtn.addEventListener('click', ()=>{
     if(!window.IS_ADMIN){ alert('Admin only'); return; }
