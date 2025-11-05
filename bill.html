@@ -58,9 +58,6 @@ h1 {
   border-radius: 8px;
   margin-bottom: 16px;
 }
-.debug-pre {
-  background:#fff6e6;border:1px solid #f0d9b7;padding:10px;border-radius:8px;max-height:240px;overflow:auto;font-family:monospace;font-size:12px;
-}
 </style>
 </head>
 <body>
@@ -74,9 +71,6 @@ h1 {
 
   <div id="coin-summary" class="coin-summary"></div>
   <div id="summary"></div>
-
-  <!-- debug area -->
-  <div id="debug-area" style="margin-top:12px"></div>
 
   <div style="margin-top:16px;text-align:right">
     <button onclick="location.href='index.html'">← Back</button>
@@ -106,17 +100,11 @@ let IS_ADMIN = false;
 const summaryEl = document.getElementById('summary');
 const adminStatus = document.getElementById('admin-status');
 const coinSummaryEl = document.getElementById('coin-summary');
-const debugArea = document.getElementById('debug-area');
-
-/* escape for HTML display */
-function escapeHtml(s){
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
-}
 
 /* -------------------------------
    Admin login
 --------------------------------*/
-document.getElementById('admin-login-btn').addEventListener('click', ()=>{
+document.getElementById('admin-login-btn').addEventListener('click', ()=> {
   const pw = prompt('Enter admin password:');
   if(pw === 'sunoo'){
     IS_ADMIN = true;
@@ -126,64 +114,57 @@ document.getElementById('admin-login-btn').addEventListener('click', ()=>{
 });
 
 /* -------------------------------
-   Load and render bills (reordered)
+   Load and render orders (matches orders/{date}/{payer})
 --------------------------------*/
 function renderBills(){
-  summaryEl.innerHTML = '<i>Loading…</i>';
-  coinSummaryEl.innerHTML = '';
-
-  db.ref('bills').once('value').then(snap=>{
+  db.ref('orders').once('value').then(snap=>{
     const data = snap.val() || {};
-    console.log('bills snapshot:', data);
-
     const entries = [];
 
-    // Flatten all accepted entries into an array with timestamps
-    for(const payerKey of Object.keys(data || {})){
-      const payerObj = data[payerKey] || {};
-      for(const dateKey of Object.keys(payerObj || {})){
-        const dateObj = payerObj[dateKey] || {};
-        for(const timeKey of Object.keys(dateObj || {})){
-          const entry = dateObj[timeKey];
-          if(entry && entry.accepted){
-            // try to build a timestamp from date + time; fall back to Date.parse variants
-            let ts = NaN;
-            try {
-              ts = new Date(`${dateKey} ${timeKey}`).getTime();
-              if(isNaN(ts)) ts = Date.parse(`${dateKey}T${timeKey}`);
-            } catch(e){
-              ts = NaN;
-            }
-            entries.push({
-              payer: payerKey,
-              date: dateKey,
-              time: timeKey,
-              amount: Number(entry.amount || 0),
-              orderUser: entry.orderUser || '',
-              ts: isNaN(ts) ? 0 : ts,
-              rawEntry: entry
-            });
+    // We expect orders structure: orders/{date}/{payer} -> { status, total, ts, user, ... }
+    for(const dateKey of Object.keys(data || {})){
+      const dateObj = data[dateKey] || {};
+      for(const payerKey of Object.keys(dateObj || {})){
+        const entry = dateObj[payerKey];
+        if(!entry) continue;
+        // treat either entry.accepted truthy OR entry.status === 'accepted'
+        const isAccepted = Boolean(entry.accepted) || String(entry.status || '').toLowerCase() === 'accepted';
+        if(!isAccepted) continue;
+
+        // timestamp: prefer numeric ts field, fall back to Date parse of date + optional time field
+        let ts = Number(entry.ts || 0);
+        if(isNaN(ts) || ts === 0){
+          try {
+            // if you have a time field in the entry, use it; otherwise parse date only
+            const maybeTime = entry.time ? `${dateKey} ${entry.time}` : `${dateKey}`;
+            ts = new Date(maybeTime).getTime();
+            if(isNaN(ts)) ts = 0;
+          } catch(e){
+            ts = 0;
           }
         }
+
+        entries.push({
+          payer: payerKey,
+          date: dateKey,
+          time: entry.time || '',
+          amount: Number(entry.amount || entry.total || 0),
+          orderUser: entry.orderUser || entry.user || '',
+          ts: ts
+        });
       }
     }
 
-    console.log('flattened entries:', entries);
-
     if(entries.length === 0){
       summaryEl.innerHTML = '<i>No accepted bills yet.</i>';
-      // show raw DB to help debug — useful to inspect whether data is present but not matching the expected shape
-      debugArea.innerHTML = '<div style="font-weight:700;margin-bottom:6px">Raw bills node (for debugging):</div>'
-        + '<pre class="debug-pre">' + escapeHtml(JSON.stringify(data, null, 2)) + '</pre>'
-        + '<div style="margin-top:6px;font-size:13px;color:#555">Check that your accepted order is under bills/{payer}/{date}/{time} and includes "accepted": true and "amount".</div>';
       coinSummaryEl.innerHTML = '<i>No coins yet recorded.</i>';
       return;
     }
-    debugArea.innerHTML = ''; // clear debug area if entries found
 
-    // Group by payer after sorting rows, and compute subtotals
+    // Sort rows newest first
     entries.sort((a,b)=>b.ts - a.ts);
 
+    // Group by payer and compute subtotals
     const byPayer = {};
     const subtotals = {};
     entries.forEach(e=>{
@@ -192,6 +173,7 @@ function renderBills(){
       subtotals[e.payer] = (subtotals[e.payer] || 0) + Number(e.amount || 0);
     });
 
+    // Sort payers by subtotal descending
     const payersSorted = Object.keys(byPayer)
       .sort((a,b)=> (subtotals[b] || 0) - (subtotals[a] || 0) );
 
@@ -213,11 +195,11 @@ function renderBills(){
         const timeEsc = escAttr(r.time);
         const amountVal = Number(r.amount || 0);
         html += `<div class="row">
-          <div>${r.date} ${r.time} — ${r.orderUser || ''}</div>
+          <div>${r.date}${r.time ? ' ' + r.time : ''} — ${r.orderUser || ''}</div>
           <div>${amountVal.toFixed(2)}
             ${IS_ADMIN ? `
-              <button class="btn edit" onclick="editBill('${payerEsc}','${dateEsc}','${timeEsc}',${amountVal})">✏</button>
-              <button class="btn delete" onclick="deleteBill('${payerEsc}','${dateEsc}','${timeEsc}')">🗑</button>` : ''}
+              <button class="btn edit" onclick="editBill('${dateEsc}','${payerEsc}',${amountVal})">✏</button>
+              <button class="btn delete" onclick="deleteBill('${dateEsc}','${payerEsc}')">🗑</button>` : ''}
           </div>
         </div>`;
       });
@@ -230,16 +212,11 @@ function renderBills(){
     summaryEl.innerHTML = html;
 
     // Build coin summary from subtotals
-    const totalCoins = {};
-    for(const p of Object.keys(subtotals)){
-      totalCoins[p] = subtotals[p];
-    }
-    renderCoinSummary(totalCoins);
+    renderCoinSummary(subtotals);
   }).catch(err=>{
-    console.error('Error loading bills:', err);
-    summaryEl.innerHTML = '<i>Error loading bills. See console for details.</i>';
+    console.error('Error loading orders:', err);
+    summaryEl.innerHTML = '<i>Error loading orders.</i>';
     coinSummaryEl.innerHTML = '';
-    debugArea.innerHTML = '<div style="color:#900;margin-top:8px"><b>Read error:</b> ' + escapeHtml(String(err)) + '</div>';
   });
 }
 
@@ -264,15 +241,19 @@ function renderCoinSummary(coinData){
 }
 
 /* -------------------------------
-   Edit & Delete for Admin
+   Edit & Delete for Admin (adapted to orders/{date}/{payer})
 --------------------------------*/
-window.editBill = function(payer, date, time, oldAmount){
+window.editBill = function(date, payer, oldAmount){
   if(!IS_ADMIN) return alert('Admin only.');
   const newAmount = prompt(`Edit amount (was ${oldAmount}):`, oldAmount);
   if(newAmount === null) return;
   const val = parseFloat(newAmount);
   if(isNaN(val)) return alert('Invalid number.');
-  db.ref(`bills/${payer}/${date}/${time}/amount`).set(val).then(()=>{
+  // update total and amount keys to be safe
+  db.ref(`orders/${date}/${payer}/total`).set(val);
+  db.ref(`orders/${date}/${payer}/amount`).set(val);
+  db.ref(`orders/${date}/${payer}/amount`).then(()=>{}); // keep consistent
+  db.ref(`orders/${date}/${payer}/total`).once('value').then(()=>{
     alert('Updated ✅');
     renderBills();
   }).catch(err=>{
@@ -281,15 +262,15 @@ window.editBill = function(payer, date, time, oldAmount){
   });
 };
 
-window.deleteBill = function(payer, date, time){
+window.deleteBill = function(date, payer){
   if(!IS_ADMIN) return alert('Admin only.');
-  if(confirm('Delete this bill entry?')){
-    db.ref(`bills/${payer}/${date}/${time}`).remove().then(()=>{
+  if(confirm('Delete this order entry?')){
+    db.ref(`orders/${date}/${payer}`).remove().then(()=>{
       alert('Deleted ✅');
       renderBills();
     }).catch(err=>{
       console.error('Delete failed', err);
-      alert('Delete failed.');
+      alert('Delete failed.' );
     });
   }
 };
